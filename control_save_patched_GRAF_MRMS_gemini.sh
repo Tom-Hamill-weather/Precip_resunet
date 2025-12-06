@@ -1,0 +1,16 @@
+#!/bin/bash
+
+sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 6
+sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 12
+sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 18
+sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 24
+
+sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 6
+sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 12
+sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 18
+sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 24
+
+sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025120100 6
+sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025120100 12
+sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025120100 18
+sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025120100 24

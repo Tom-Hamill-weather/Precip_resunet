@@ -37,6 +37,12 @@ Let's presume by running 2(b) above you have a complete set of MRMS data saved a
 $ python save_patched_GRAF_MRMS_gemini.py 2025120100 12
 
 where CYYYYMMDDHH is the character string date year/month/day/hour, CLEAD = character string lead time in hours, e.g., 12.  It will then save time series of 64x64 grids of 12-h forecast data, temporally coincident MRMS data, and terrain info. It saves the last 60 days of coincident MRMS and GRAF data plus data from 10-12 months ago.  Hopefully this is enough data so that the training of the neural network will proceed without problem.   Data are written to a pickled file for use in the next training step.
+
+NOTE: this doesn't seem to work interactively for me on the Cray, presumably because interactive sessions run out of memory.  Hence I use a shell script that calls a slurm process with more memory:
+
+$ ./control_save_patched_GRAF_MRMS_gemini.sh
+
+which invokes control_save_patched_GRAF_MRMS_gemini.slurm
  
 Also, should you want, on the cray, you can run the script 
 
