@@ -1,5 +1,7 @@
 """
-This plots 1-h GRAF accumulated precip and MRMS analysis
+This plots 1-h GRAF accumulated precip and MRMS analysis;
+a sort of sanity check so that you can make sure the 
+data look consistent with each other.
 
 python plot_GRAF_MRMS_probs.py cyyyymmddhh clead
 

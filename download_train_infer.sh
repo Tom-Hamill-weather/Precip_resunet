@@ -1,0 +1,207 @@
+#!/bin/zsh
+# ./download_train_infer.sh
+# simple script to train over multiple lead times.
+# the pytorch_train_resunet is smart enough to 
+# begin its training with the weights of the 
+# training 3 h previous rather than starting from
+# random.
+# Tom Hamill, 14 Dec 2025
+
+#sleep 2h
+#sleep 10m
+
+#cd ../resnet_data
+#gunzip g.tar.gz
+#tar xvf g.tar
+#cd ../resnet
+
+python pytorch_train_resunet.py 2025120100 3
+python pytorch_train_resunet.py 2025120100 6
+python pytorch_train_resunet.py 2025120100 9
+python pytorch_train_resunet.py 2025120100 12
+python pytorch_train_resunet.py 2025120100 15
+python pytorch_train_resunet.py 2025120100 18
+python pytorch_train_resunet.py 2025120100 21
+python pytorch_train_resunet.py 2025120100 24
+
+python pytorch_train_resunet.py 2025120100 27
+python pytorch_train_resunet.py 2025120100 30
+python pytorch_train_resunet.py 2025120100 33
+python pytorch_train_resunet.py 2025120100 36
+python pytorch_train_resunet.py 2025120100 39
+python pytorch_train_resunet.py 2025120100 42
+python pytorch_train_resunet.py 2025120100 45
+python pytorch_train_resunet.py 2025120100 48
+
+
+python resunet_inference.py 2025120412 1
+python resunet_inference.py 2025120412 2
+python resunet_inference.py 2025120412 3
+python resunet_inference.py 2025120412 4
+python resunet_inference.py 2025120412 5
+python resunet_inference.py 2025120412 6
+
+python resunet_inference.py 2025120412 7
+python resunet_inference.py 2025120412 8
+python resunet_inference.py 2025120412 9
+python resunet_inference.py 2025120412 10
+python resunet_inference.py 2025120412 11
+python resunet_inference.py 2025120412 12
+
+python resunet_inference.py 2025120412 13
+python resunet_inference.py 2025120412 14
+python resunet_inference.py 2025120412 15
+python resunet_inference.py 2025120412 16
+python resunet_inference.py 2025120412 17
+python resunet_inference.py 2025120412 18
+
+python resunet_inference.py 2025120412 19
+python resunet_inference.py 2025120412 20
+python resunet_inference.py 2025120412 21
+python resunet_inference.py 2025120412 22
+python resunet_inference.py 2025120412 23
+python resunet_inference.py 2025120412 24
+
+python resunet_inference.py 2025120412 25
+python resunet_inference.py 2025120412 26
+python resunet_inference.py 2025120412 27
+python resunet_inference.py 2025120412 28
+python resunet_inference.py 2025120412 29
+python resunet_inference.py 2025120412 30
+
+python resunet_inference.py 2025120412 31
+python resunet_inference.py 2025120412 32
+python resunet_inference.py 2025120412 33
+python resunet_inference.py 2025120412 34
+python resunet_inference.py 2025120412 35
+python resunet_inference.py 2025120412 36
+
+python resunet_inference.py 2025120412 37
+python resunet_inference.py 2025120412 38
+python resunet_inference.py 2025120412 39
+python resunet_inference.py 2025120412 40
+python resunet_inference.py 2025120412 41
+python resunet_inference.py 2025120412 42
+
+python resunet_inference.py 2025120412 43
+python resunet_inference.py 2025120412 44
+python resunet_inference.py 2025120412 45
+python resunet_inference.py 2025120412 46
+python resunet_inference.py 2025120412 47
+python resunet_inference.py 2025120412 48
+
+
+python resunet_inference.py 2025120300 1
+python resunet_inference.py 2025120300 2
+python resunet_inference.py 2025120300 3
+python resunet_inference.py 2025120300 4
+python resunet_inference.py 2025120300 5
+python resunet_inference.py 2025120300 6
+
+python resunet_inference.py 2025120300 7
+python resunet_inference.py 2025120300 8
+python resunet_inference.py 2025120300 9
+python resunet_inference.py 2025120300 10
+python resunet_inference.py 2025120300 11
+python resunet_inference.py 2025120300 12
+
+python resunet_inference.py 2025120300 13
+python resunet_inference.py 2025120300 14
+python resunet_inference.py 2025120300 15
+python resunet_inference.py 2025120300 16
+python resunet_inference.py 2025120300 17
+python resunet_inference.py 2025120300 18
+
+python resunet_inference.py 2025120300 19
+python resunet_inference.py 2025120300 20
+python resunet_inference.py 2025120300 21
+python resunet_inference.py 2025120300 22
+python resunet_inference.py 2025120300 23
+python resunet_inference.py 2025120300 24
+
+python resunet_inference.py 2025120300 25
+python resunet_inference.py 2025120300 26
+python resunet_inference.py 2025120300 27
+python resunet_inference.py 2025120300 28
+python resunet_inference.py 2025120300 29
+python resunet_inference.py 2025120300 30
+
+python resunet_inference.py 2025120300 31
+python resunet_inference.py 2025120300 32
+python resunet_inference.py 2025120300 33
+python resunet_inference.py 2025120300 34
+python resunet_inference.py 2025120300 35
+python resunet_inference.py 2025120300 36
+
+python resunet_inference.py 2025120300 37
+python resunet_inference.py 2025120300 38
+python resunet_inference.py 2025120300 39
+python resunet_inference.py 2025120300 40
+python resunet_inference.py 2025120300 41
+python resunet_inference.py 2025120300 42
+
+python resunet_inference.py 2025120300 43
+python resunet_inference.py 2025120300 44
+python resunet_inference.py 2025120300 45
+python resunet_inference.py 2025120300 46
+python resunet_inference.py 2025120300 47
+python resunet_inference.py 2025120300 48
+
+
+python resunet_inference.py 2025120812 1
+python resunet_inference.py 2025120812 2
+python resunet_inference.py 2025120812 3
+python resunet_inference.py 2025120812 4
+python resunet_inference.py 2025120812 5
+python resunet_inference.py 2025120812 6
+
+python resunet_inference.py 2025120812 7
+python resunet_inference.py 2025120812 8
+python resunet_inference.py 2025120812 9
+python resunet_inference.py 2025120812 10
+python resunet_inference.py 2025120812 11
+python resunet_inference.py 2025120812 12
+
+python resunet_inference.py 2025120812 13
+python resunet_inference.py 2025120812 14
+python resunet_inference.py 2025120812 15
+python resunet_inference.py 2025120812 16
+python resunet_inference.py 2025120812 17
+python resunet_inference.py 2025120812 18
+
+python resunet_inference.py 2025120812 19
+python resunet_inference.py 2025120812 20
+python resunet_inference.py 2025120812 21
+python resunet_inference.py 2025120812 22
+python resunet_inference.py 2025120812 23
+python resunet_inference.py 2025120812 24
+
+python resunet_inference.py 2025120812 25
+python resunet_inference.py 2025120812 26
+python resunet_inference.py 2025120812 27
+python resunet_inference.py 2025120812 28
+python resunet_inference.py 2025120812 29
+python resunet_inference.py 2025120812 30
+
+python resunet_inference.py 2025120812 31
+python resunet_inference.py 2025120812 32
+python resunet_inference.py 2025120812 33
+python resunet_inference.py 2025120812 34
+python resunet_inference.py 2025120812 35
+python resunet_inference.py 2025120812 36
+
+python resunet_inference.py 2025120812 37
+python resunet_inference.py 2025120812 38
+python resunet_inference.py 2025120812 39
+python resunet_inference.py 2025120812 40
+python resunet_inference.py 2025120812 41
+python resunet_inference.py 2025120812 42
+
+python resunet_inference.py 2025120812 43
+python resunet_inference.py 2025120812 44
+python resunet_inference.py 2025120812 45
+python resunet_inference.py 2025120812 46
+python resunet_inference.py 2025120812 47
+python resunet_inference.py 2025120812 48
+
+

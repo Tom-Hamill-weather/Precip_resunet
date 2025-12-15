@@ -8,11 +8,12 @@ This provides notes for training and inference of a residual U-Net for hourly pr
 1. Generalities.
 ----------------
 
-I've done my code development on my mac laptop and I've adapted to conduct the training and inference on the laptop; it's significantly faster than the Cray. However, the underlying GRAF and MRMS data sit on the Cray.  This means that I either need to copy the underlying time series of full-field GRAF and MRMS data from the Cray to the laptop, or to synthesize the patched training data on the cray and then transfer that smaller-footprint synthesized data back to the laptop.  This second approach makes more sense to me.  Accordingly, I have set up an alias to rsync my code folder on the mac to the Cray:
+I've done my code development on my mac laptop and I've adapted to conduct the training and inference on the laptop; it's significantly faster than the Cray. However, the underlying GRAF and MRMS data sit on the Cray.  This means that I either need to copy the underlying time series of full-field GRAF and MRMS data from the Cray to the laptop, or to synthesize the patched training data on the Cray and then transfer that smaller-footprint synthesized data back to the laptop.  This second approach makes more sense to me.  Accordingly, I have set up an alias to rsync my code folder on the mac to the Cray:
 
 resunet_sync: aliased to rsync -avz /Users/tom.hamill@weather.com/python/resnet thamill@10.66.63.22:resnet/
 
-I type $ resunet_sync , which prompts me for my passphrase and then updates the Cray.
+I type $ resunet_sync , which prompts me for my passphrase and then updates the Cray
+with the latest code.
 
 This set up a /storage1/home/thamill/resnet/resnet directory (unsure why it added the
 additional resnet.   I set up a data subdirectory, ~/resnet/resnet_data too.
@@ -22,17 +23,16 @@ additional resnet.   I set up a data subdirectory, ~/resnet/resnet_data too.
 
 (a) GRAF CONUS terrain information and lat/lon for the GRAF CONUS domain.   This was produced by the script GRAF_terrain_height.py with data saved in GRAF_CONUS_terrain_info.nc in the same directory as the code.
 
-(b) Time series of hourly MRMS accumulated precipitation data and its quality.  These data were produced on the Cray by the python script save_remapped_MRMS_hourly_precip_quality.py.   It runs rather slowly, for there is access to the MRMS archive and interpolation to the GRAF grid.   When I want to process a lot of data, I typically set up a shell script that calls parallel slurm jobs to save the data.  An example script is in control_MRMS_download.sh and control_MRMS_download.slurm .   I've set it up so that the MRMS directory, 
-/storage/home/thamill/MRMS, you should have read/write privilege, so no need to make your own copy.
+(b) Time series of hourly MRMS accumulated precipitation data and its quality.  These data were produced on the Cray by the python script save_remapped_MRMS_hourly_precip_quality.py.   It runs rather slowly, for there is access to the MRMS archive and interpolation to the GRAF grid.   When I want to process a lot of data, I typically set up a shell script that calls parallel slurm jobs to save the data.  An example script is in control_MRMS_download.sh and control_MRMS_download.slurm . I've set it up so that it accesses the MRMS directory, /storage/home/thamill/MRMS, you should have read/write privilege, so no need to make your own copy of MRMS data.
 
-(c) Hourly GRAF accumulated precipitation forecasts.   These were produced by Brett Wilt or someone on his team and are stored regularly on the Cray without my intervention as grib files using the WINC naming convention. The locations for these are defined in the configuration file, config_hdo.ini.  There's a peculiarity, in that in April 2024 the data started being stashed in a different location.  That is so far back it shouldn't affect you.
+(c) Hourly GRAF accumulated precipitation forecasts.   These were produced by Brett Wilt or someone on his team and are stored regularly on the Cray without my intervention as grib files using the "WINC" naming convention. The locations for these are defined in the configuration file, config_hdo.ini.  There's a peculiarity, in that in April 2024 the data started being stashed in a different location.  That is so far back it shouldn't affect you.
 
 (d) Configuration file info.  Stored in config_hdo.ini for the cray, config_laptop.ini for the laptop.
 
 3. Preparation of a data set for the training of the residual U-Net.
 --------------------------------------------------------------------
 
-Let's presume by running 2(b) above you have a complete set of MRMS data saved and interpolated to the GRAF grid.   A necessary next step is extracting patches of coincident GRAF, MRMS, and terrain data.   This is performed by the python script save_patched_GRAF_MRMS_gemini.py, which again is run on the cray. It requires the date and lead time on the command line, e.g., 
+Let's presume by running 2(b) above you or I have a complete set of MRMS data saved and interpolated to the GRAF grid.   A necessary next step is extracting patches of coincident GRAF, MRMS, and terrain data.  This script has some fancier logic in it to prefer saving wet patches over dry patches, which assist in the training model accuracy.   This is performed by the python script save_patched_GRAF_MRMS_gemini.py, which again is run on the Cray. It requires the date and lead time on the command line, e.g., 
  
 $ python save_patched_GRAF_MRMS_gemini.py 2025120100 12
 
@@ -44,7 +44,7 @@ $ ./control_save_patched_GRAF_MRMS_gemini.sh
 
 which invokes control_save_patched_GRAF_MRMS_gemini.slurm
  
-Also, should you want, on the cray, you can run the script 
+Also, should you want, on the Cray, you can run the script 
 
 $ python plot_GRAF_MRMS.py CYYYYMMDDHH CLEAD to produce a sample plot to make sure the data look realistic.   It writes to a png file.
 
@@ -66,30 +66,32 @@ $ tar xvf g.tar
 $ ls    # to verify training, validation, and prediction cPickled files were transferred.
 $ cd ../resnet # to where the training and inference code are.
 
+I also set up processes to do this in parallel for multiple lead times, using the script control_save_patched_GRAF_MRMS_gemini.sh . Then I tar, compress, and move all the 
+lead times through 48 h at once.
+
 4. Run training on laptop.
 --------------------------
 
-There may be some preliminaries.   First, I made a subdirectory for the saved trained weights 
-
-$ pwd    # for me, returns /Users/tom.hamill@weather.com/python/resnet
-$ mkdir trainings
+There may be some preliminaries.   First, I made a subdirectory for the saved trained weights. With resnet as my code directory, I have a ../resnet_data directory for the
+files of patch data, a ../resnet_data/trainings for the trained weights, a ../resnet_data/
+GRAF for samples of GRAF forecasts for inference, and a ../resnet_data/probs for probability files produced by the inference code, and ../resnet_data/plots for png files produced by the plotting routine.
 
 Also, before training, take a look at the library imports at the top of the training code, pytorch_train_resunet.py . Make sure you have all those python libraries installed in conda or similar.
 
-You might also want to verify that the saved patches of data look realistic.   I've set up a python script plot_graf_mrms_samples.py and also if you want to look at a whole bunch of them, run control_plot_graf_mrms_samples.py.  png files are written, which I then typically view with preview on the command line, or through the finder.
+You might also want to verify that the saved patches of data look realistic.   I've set up a python script plot_graf_mrms_samples.py and also if you want to look at a whole bunch of them, run control_plot_graf_mrms_samples.py.  png files are written to the resnet directory, which I then typically view with preview on the command line, or through the finder.
 
 Then I think then you should be ready to run a training.  This is accomplished with a command like
 
 $ python pytorch_train_resunet.py CYYYYMMDDHH CLEAD
 
-I'd expect the training to take an hour or so.  As you get comfortable with the code, you might shorten the NUM_EPOCHS for faster training (possibly slightly less accurate) or increase the LEARNING_RATE or decrease the EARLY_STOPPING_PATIENCE . The code is designed to print quality diagnostics as it runs; expect maybe 10 epochs before the numbers start looking vaguely realistic.   When it finishes, the training for each epoch in the trainings directory.
+I'd expect the training to take an hour or so for a given lead time.  As you get comfortable with the code, you might shorten the NUM_EPOCHS for faster training (possibly slightly less accurate) or increase the LEARNING_RATE or decrease the EARLY_STOPPING_PATIENCE . The code is designed to print quality diagnostics as it runs; expect maybe 10 epochs before the numbers start looking vaguely realistic.   When it finishes, the training for each epoch in the trainings directory.
 
-Right now the assumption is that there would be a different training for each lead time; if making an inference for lead time = 18, it won't consider loading the trained weights for lead time = 12.
+Right now the assumption is that there would be a different training for each lead time; if making an inference for lead time = 18, given the similarity in error, rather than starting from scratch, the code is designed to go looking for any 18h weight file that may already exist and start from that, and lacking that, it considers a weight file from 15 h, which should be a good starting point that can cut off 5-6 epochs of training.
 
 5. Inference.
 -------------
 
-To run inference, you'll need a recent sample of GRAF data that are not in the training data set.  For example, if you trained on 2025120100 12, you might want to examine the forecast for 2025120412 12.  As the data for this initial condition datae and lead time are stashed on the Cray, you need to copy these to the laptop.  This can be accomplished with the python script copy_graf_to_laptop.py, e.g., 
+To run inference, you'll need a recent sample of GRAF data that are not in the training data set.  For example, if you trained on 2025120100 12, you might want to examine the forecast for 2025120412 12.  As the data for this initial condition date and lead time are stashed on the Cray, you need to copy these to the laptop.  This can be accomplished with the python script copy_graf_to_laptop.py, e.g., 
 
 $ python copy_graf_to_laptop.py 2025120412 12
 
@@ -99,7 +101,14 @@ I believe you're ready to run inference now.  Given the example date and lead ti
 
 $ python resunet_inference.py 2025120412 12
 
-It will take a minute or two to complete, but it should make a .png file with plots of probabilities. 
+It will take a minute or two to complete, but it will produce probabilities and dump them to a netCDF file.   
+
+6. Plotting. 
+------------
+
+I've set up a script make_plots.py that will generate plots.  A typical command following the previous inference would be 
+
+$ python make_plots.py 2025120412 12 
 
 6. Next steps.
 --------------

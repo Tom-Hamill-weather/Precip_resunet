@@ -276,5 +276,3 @@ for idate, date in enumerate(dates):
     istat = save_precip_quality_to_netCDF(output_directory, \
         ny_GRAF, nx_GRAF, lons_GRAF, lats_GRAF, \
         MRMS_precip, MRMS_quality, date)
-
-

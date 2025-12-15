@@ -1,6 +1,12 @@
-
 """
 python GRAF_terrain_height.py
+
+This was the script to generate the GRAF terrain height data.
+There should be a netCDF file output from this.  The input 
+data is either on Tom's laptop or a directory of his at AWS.
+
+Tom Hamill
+Dec 2025
 
 """
 import pygrib
