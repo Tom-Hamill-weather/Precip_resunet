@@ -64,6 +64,7 @@ class GRAFDataProcessor:
         self.dirs = config["DIRECTORIES"]
         self.params = config["PARAMETERS"]
         self.ndays_train = int(self.params.get("ndays_train", 60))
+        self.graf_transition_date = self.params.get("GRAF_transition_date", "2024040512")
 
     def get_filenames(self, cyyyymmddhh, clead):
         """ Generates file paths based on date and logic switch (April 2024)."""
@@ -75,7 +76,7 @@ class GRAFDataProcessor:
         cyyyymmdd_fcst = cyyyymmddhh_fcst[0:8]
         chh_fcst = cyyyymmddhh_fcst[8:10]
 
-        if int(cyyyymmddhh) > 2024040512:
+        if int(cyyyymmddhh) > int(self.graf_transition_date):
             base_dir = self.dirs["GRAFdatadir_conus_new"]
             prefix = 'grid.hdo-graf_conus.'
         else:
@@ -148,7 +149,7 @@ class GRAFDataProcessor:
             istat: 0 if successful, -1 if failed
             gfs_data: dict with keys 'pwat', 'r', 'cape', 'lats', 'lons', 'step'
         """
-        gfs_dir = '/storage1/home/thamill/resnet/resnet_data/gfs'
+        gfs_dir = self.dirs.get("gfs_data_directory", "/storage1/home/thamill/resnet/resnet_data/gfs")
         filename = f'gfs_subset_{cyyyymmddhh}.nc'
         filepath = os.path.join(gfs_dir, filename)
 
@@ -275,7 +276,7 @@ class GRAFDataProcessor:
 
     def read_terrain(self):
         """Reads static terrain data."""
-        infile = 'GRAF_CONUS_terrain_info.nc'
+        infile = self.dirs.get("terrain_file", "GRAF_CONUS_terrain_info.nc")
         if not os.path.exists(infile):
             print(f'CRITICAL: Terrain file {infile} not found. Exiting.')
             sys.exit(1)
@@ -340,13 +341,24 @@ def save_dataset(filename, data_dict):
 
 # ----------------------------------------------------------------
 
+def detect_config():
+    """Select the appropriate config file based on the runtime environment."""
+    if os.path.exists('/data2/resnet_data'):
+        return 'config_aws.ini'
+    elif os.path.exists('/storage2/library/archive/grid'):
+        return 'config_hdo.ini'
+    else:
+        return 'config_laptop.ini'
+
+
 def main():
     if len(sys.argv) < 3:
         print("Usage: $ python save_patched_GRAF_MRMS_GFS.py cyyyymmddhh clead")
         sys.exit(1)
 
     cyyyymmddhh, clead = sys.argv[1], sys.argv[2]
-    processor = GRAFDataProcessor('config_hdo.ini')
+    config_file = detect_config()
+    processor = GRAFDataProcessor(config_file)
 
     # Date generation logic
     iday_shift = 1 + int(clead) // 24
@@ -364,6 +376,8 @@ def main():
 
     date_list = daterange(date_begin1, date_end1, 6) + daterange(date_begin2, date_end2, 6) + \
                 daterange(date_begin3, date_end3, 6) + daterange(date_begin4, date_end4, 6)
+
+    print(f'INFO: Processing {len(date_list)} dates for init={cyyyymmddhh} lead={clead}h')
 
     # Buckets initialized with time-stamp lists and GFS data lists
     buckets = {
@@ -383,7 +397,15 @@ def main():
 
     terrain_diff, terr_dlon, terr_dlat = processor.read_terrain()
 
+    ndates_ok = 0
     for idate, date in enumerate(date_list):
+        if idate % 50 == 0:
+            n_train = len(buckets['train']['GRAF'])
+            n_val   = len(buckets['val']['GRAF'])
+            n_pred  = len(buckets['pred']['GRAF'])
+            print(f'INFO: Date {idate+1}/{len(date_list)} ({date})  '
+                  f'patches so far: train={n_train} val={n_val} pred={n_pred}')
+
         cyyyymmddhh_valid = dateshift(date, int(clead))
         graf_file, _, _ = processor.get_filenames(date, clead)
         istat_graf, precip_graf, lats, lons, _ = processor.read_grib_precip(graf_file, int(clead))
@@ -405,6 +427,8 @@ def main():
 
         if len(j_indices) == 0:
             continue
+
+        ndates_ok += 1
 
         # Interpolate GFS to patches
         gfs_patches = processor.interpolate_gfs_to_patches(gfs_data, lats, lons, j_indices, i_indices)
@@ -432,7 +456,11 @@ def main():
 
         import gc; gc.collect()
 
-    base_path = '../resnet_data'
+    print(f'INFO: Loop complete. {ndates_ok}/{len(date_list)} dates yielded patches.')
+    print(f'INFO: Final patch counts: train={len(buckets["train"]["GRAF"])} '
+          f'val={len(buckets["val"]["GRAF"])} pred={len(buckets["pred"]["GRAF"])}')
+
+    base_path = processor.dirs.get("resnet_data_directory", "../resnet_data")
     if not os.path.exists(base_path): os.makedirs(base_path)
     save_dataset(f'{base_path}/GRAF_Unet_data_train_{cyyyymmddhh}_{clead}h.cPick', buckets['train'])
     save_dataset(f'{base_path}/GRAF_Unet_data_test_{cyyyymmddhh}_{clead}h.cPick', buckets['val'])
