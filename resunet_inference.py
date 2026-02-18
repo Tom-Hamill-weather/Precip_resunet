@@ -62,11 +62,8 @@ def read_config_file(config_file, directory_object_name):
 # ---------------------------------------------------------------
 
 def define_manhattan(N):
-    
     """
-    This defines a weighting function for each patch, from 1.0
-    value at the center, linearly decreasing with distance to 
-    the patch edge.
+    This defines a weighting function for each patch.
     """
     ilocs = np.arange(N)
     jlocs = np.copy(ilocs)
@@ -81,42 +78,25 @@ def define_manhattan(N):
 # ---------------------------------------------------------------
 
 def init_sigma(cyyyymmddhh, clead):
-    
     """
-    as a comparison for the deep learning probability, we generate
-    a GRAF pseudo-probability by thresholding an image at the 
-    desired amount (e.g., POP = 0.25 mm) and then smoothing.  
-    Previously Tom determined that these smoothing values (sigma)
-    were approximately optimal for minimizing Brier score vs. obs.
+    Comparison sigma for raw GRAF smoothing.
     """
-    
     sigmas = [5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0, 60.0] 
     cmm = cyyyymmddhh[4:6]
     imm = int(cmm)
-    if int(clead) <= 6:
-        sigma = 5.0 *4./3.
-    elif int(clead) > 6 and int(clead) <= 12:
-        sigma = 10.0 *4./3.
-    elif int(clead) > 12 and int(clead) <= 18:
-        sigma = 10.0 *4./3.
-    elif int(clead) > 18 and int(clead) <= 24:
-        sigma = 15.0 *4./3.
-    elif int(clead) > 24 and int(clead) <= 30:
-        sigma = 25.0 *4./3.
-    elif int(clead) > 30 and int(clead) <= 36:
-        sigma = 30.0 *4./3.
-    elif int(clead) > 36 and int(clead) <= 42:
-        sigma = 30.0 *4./3.
-    elif int(clead) > 42 and int(clead) <= 48:
-        sigma = 40.0 *4./3.
-    elif int(clead) > 48 and int(clead) <= 54:
-        sigma = 50.0 *4./3.
-    elif int(clead) > 54 and int(clead) <= 60:
-        sigma = 50.0 *4./3.
-    elif int(clead) > 60 and int(clead) <= 66:
-        sigma = 60.0 *4./3.
-    elif int(clead) > 66:
-        sigma = 60.0 *4./3.
+    # Using float logic for clead
+    lc = int(clead)
+    if lc <= 6:   sigma = 5.0 * 4./3.
+    elif lc <= 12: sigma = 10.0 * 4./3.
+    elif lc <= 18: sigma = 10.0 * 4./3.
+    elif lc <= 24: sigma = 15.0 * 4./3.
+    elif lc <= 30: sigma = 25.0 * 4./3.
+    elif lc <= 36: sigma = 30.0 * 4./3.
+    elif lc <= 42: sigma = 30.0 * 4./3.
+    elif lc <= 48: sigma = 40.0 * 4./3.
+    elif lc <= 54: sigma = 50.0 * 4./3.
+    elif lc <= 60: sigma = 50.0 * 4./3.
+    else:          sigma = 60.0 * 4./3.
     return sigma
 
 # ---------------------------------------------------------------
@@ -155,10 +135,6 @@ def read_gribdata(gribfilename, endStep):
 # ---------------------------------------------------------------
 
 def GRAF_precip_read(clead, cyyyymmddhh, GRAFdatadir_conus_laptop):
-    
-    """
-    presumes the GRAF case data have been loaded to the laptop already.
-    """
     il = int(clead)
     cyyyymmdd = cyyyymmddhh[0:8]
     cyyyymm= cyyyymmddhh[0:6]
@@ -210,10 +186,6 @@ def GRAF_precip_read(clead, cyyyymmddhh, GRAFdatadir_conus_laptop):
 # ---------------------------------------------------------------
 
 def read_terrain_characteristics(infile):
-    
-    """
-    a previously generated file of terrain data. 
-    """
     fexist1 = os.path.exists(infile)
     if fexist1 == True:
         nc = Dataset(infile, 'r')
@@ -233,11 +205,6 @@ def read_terrain_characteristics(infile):
 def generate_features(nchannels, date, clead, \
         ny, nx, precipitation_GRAF, terrain, t_diff, dt_dlon, \
         dt_dlat, verif_local_time, norm_stats=None):
-        
-    """
-    This builds patches of predictive features arranged as in training.
-    It normalizes them as in training as well.    
-    """
     
     def normalize_stats(data, idx):
         if norm_stats is None: return data
@@ -249,6 +216,7 @@ def generate_features(nchannels, date, clead, \
 
     Xpredict_all = np.zeros((1,nchannels,ny,nx), dtype=float)
     
+    # Consistent with Training GRAF_Dataset features
     Xpredict_all[0,0,:,:] = normalize_stats(precipitation_GRAF[:,:], 0)
     interaction = precipitation_GRAF[:,:] * t_diff[:,:]
     Xpredict_all[0,1,:,:] = normalize_stats(interaction, 1)
@@ -261,10 +229,6 @@ def generate_features(nchannels, date, clead, \
 # ---------------------------------------------------------------
 
 def read_pytorch(cyyyymmddhh, clead, num_classes): 
-    
-    """
-    this reads the pytorch training weights.
-    """
     
     inference_date_int = int(cyyyymmddhh)
     target_lead = int(clead)
@@ -326,42 +290,24 @@ def read_pytorch(cyyyymmddhh, clead, num_classes):
 # -------------------------------------------------------------
 
 def calc_raw_probabilities(precipitation_GRAF, sigma):
-    """
-    Computes smoothed probability fields from raw GRAF precipitation 
-    based on binary exceedance and Gaussian smoothing.
-    """
     raw_probs = {}
-    
-    # Define thresholds
     thresholds = {
-        '0p25': 0.25,
-        '1': 1.0,
-        '2p5': 2.5,
-        '5': 5.0,
-        '10': 10.0,
-        '25': 25.0
+        '0p25': 0.25, '1': 1.0, '2p5': 2.5,
+        '5': 5.0, '10': 10.0, '25': 25.0
     }
-    
     for key, val in thresholds.items():
         binary_field = np.where(precipitation_GRAF >= val, 1., 0.)
         smoothed_prob = ndimage.gaussian_filter(binary_field, sigma)
         raw_probs[key] = smoothed_prob
-        
     return raw_probs
 
 # -------------------------------------------------------------
-# Modular Function 2: Compute Deep Learning Probabilities
+# Modular Function 2: Compute Deep Learning Probabilities (FIXED)
 # -------------------------------------------------------------
 
 def calc_dl_probabilities(model, Xpredict_all, manhattan, \
         N, ny, nx, num_classes):
         
-    """
-    Runs the deep learning inference using patch-based reconstruction,
-    normalizes with Manhattan weights, and sums softmax classes 
-    for exceedance.
-    """
-    # FIX: Use passed num_classes instead of model.num_classes
     precip_fcst_prob_all = np.zeros((num_classes, ny, nx), dtype=float)
     sumweights_all = np.zeros((ny, nx), dtype=float)
 
@@ -376,16 +322,42 @@ def calc_dl_probabilities(model, Xpredict_all, manhattan, \
             for i in icenters:
                 imin = i-N//2; imax = i+N//2
                 
+                # Extract Patch
                 Xpatch = Xpredict_all[:,:,jmin:jmax,imin:imax]
+                
+                # --- FIX: Handle Edge Cases via Padding ---
+                # At the edges of the domain, slicing might return a patch
+                # smaller than (N, N). U-Net requires (N, N) [multiple of 16].
+                # We pad, run inference, and then crop back.
+                
+                _, _, h_curr, w_curr = Xpatch.shape
+                pad_h = N - h_curr
+                pad_w = N - w_curr
+                
+                if pad_h > 0 or pad_w > 0:
+                    # Pad (Right and Bottom only)
+                    Xpatch = np.pad(Xpatch, \
+                        ((0,0), (0,0), (0, pad_h), (0, pad_w)), mode='edge')
+
                 input_tensor = torch.from_numpy(Xpatch).float().to(DEVICE)
                 
                 with torch.no_grad():
                     logits = model(input_tensor)
                     probs = F.softmax(logits, dim=1).cpu().numpy()
                 
+                # Crop back if we padded
+                if pad_h > 0 or pad_w > 0:
+                    probs = probs[:, :, :h_curr, :w_curr]
+                
+                # Accumulate
+                # Note: Manhattan also needs cropping if at edge
+                mh_weight = manhattan
+                if pad_h > 0 or pad_w > 0:
+                    mh_weight = manhattan[:h_curr, :w_curr]
+
                 precip_fcst_prob_all[:, jmin:jmax, imin:imax] += \
-                    probs[0, :, :, :] * manhattan[None, :, :]
-                sumweights_all[jmin:jmax, imin:imax] += manhattan[:,:]
+                    probs[0, :, :, :] * mh_weight[None, :, :]
+                sumweights_all[jmin:jmax, imin:imax] += mh_weight[:,:]
 
     print('Inference Pass 1...')
     process_patches(jcenter1, icenter1)
@@ -404,32 +376,18 @@ def calc_dl_probabilities(model, Xpredict_all, manhattan, \
         precip_fcst_prob_all[icat,:,:] = norm_layer
 
     dl_probs = {}
-    
-    # Indices based on 0.25mm stride + class shift
-    
-    # ...
-    # Indices based on 0.25mm stride
-    # Class k is (Threshold[k], Threshold[k+1]]
-    # Threshold[k] = k * 0.25
 
     # > 0.25 mm: Start at Class 1 (0.25 to 0.50)
     dl_probs['0p25'] = np.sum(precip_fcst_prob_all[1:,:,:], axis=0)
-
-    # > 1.0 mm: Start at Class 4 (1.0 to 1.25) because 4*0.25 = 1.0
+    # > 1.0 mm: Start at Class 4
     dl_probs['1']    = np.sum(precip_fcst_prob_all[4:,:,:], axis=0)
-
-    # > 2.5 mm: Start at Class 10 (2.5 to 2.75)
+    # > 2.5 mm: Start at Class 10
     dl_probs['2p5']  = np.sum(precip_fcst_prob_all[10:,:,:], axis=0)
-
-    # > 5.0 mm: Start at Class 20 (5.0 to 5.25)
+    # > 5.0 mm: Start at Class 20
     dl_probs['5']    = np.sum(precip_fcst_prob_all[20:,:,:], axis=0)
-
-    # > 10.0 mm: Start at Class 40 (10.0 to 10.25)
+    # > 10.0 mm: Start at Class 40
     dl_probs['10']   = np.sum(precip_fcst_prob_all[40:,:,:], axis=0)
 
-    # > 25.0 mm: Start at Class 100 (> 25.0)
-    dl_probs['25']   = np.sum(precip_fcst_prob_all[100:,:,:], axis=0)
-    
     return dl_probs
 
 # -------------------------------------------------------------
@@ -439,9 +397,6 @@ def calc_dl_probabilities(model, Xpredict_all, manhattan, \
 def write_probabilities_to_netcdf(filename, lats, lons, \
         raw_probs, dl_probs):
         
-    """
-    Saves the calculated probability fields to a NetCDF file.
-    """
     ny, nx = lats.shape
     print(f"   Saving probabilities to {filename}")
     
@@ -450,30 +405,38 @@ def write_probabilities_to_netcdf(filename, lats, lons, \
         ncfile.createDimension('y', ny)
         ncfile.createDimension('x', nx)
         
-        # Grid Variables
-        lat_var = ncfile.createVariable('lat', 'f4', ('y', 'x'))
-        lon_var = ncfile.createVariable('lon', 'f4', ('y', 'x'))
+        # Grid Variables (keep as float32 for coordinates)
+        lat_var = ncfile.createVariable('lat', 'f4', ('y', 'x'), zlib=True, complevel=4)
+        lon_var = ncfile.createVariable('lon', 'f4', ('y', 'x'), zlib=True, complevel=4)
         lat_var[:] = lats
         lon_var[:] = lons
-        
-        # Define variable mapping
-        # keys match dictionary keys from calc functions
-        keys = ['0p25', '1', '2p5', '5', '10', '25']
-        
+
+        keys = ['0p25', '1', '2p5', '5', '10']
+
         for key in keys:
-            # Raw Variables
+            # Raw Variables - stored as int16 with scale_factor for compression
             raw_name = f'raw_p{key}mm_prob'
             if key in raw_probs:
-                v = ncfile.createVariable(raw_name, 'f4', ('y', 'x'))
-                print ('key, max(raw_probs[key]) = ', key, np.max(raw_probs[key]))
-                v[:] = raw_probs[key]
-            
-            # DL Variables
+                v = ncfile.createVariable(raw_name, 'i2', ('y', 'x'),
+                                          zlib=True, complevel=4)
+                v.scale_factor = 0.0001  # Gives 0.01% precision
+                v.add_offset = 0.0
+                # Write actual values [0, 1]; netCDF will auto-scale to int16
+                v[:] = np.clip(raw_probs[key], 0.0, 1.0)
+                v.long_name = f'Raw GRAF probability > {key.replace("p", ".")} mm'
+                v.units = '1 (dimensionless, 0-1 range)'
+
+            # DL Variables - stored as int16 with scale_factor
             dl_name = f'dl_p{key}mm_prob'
             if key in dl_probs:
-                v = ncfile.createVariable(dl_name, 'f4', ('y', 'x'))
-                print ('key, max(dl_probs[key]) = ', key, np.max(dl_probs[key]))
-                v[:] = dl_probs[key]
+                v = ncfile.createVariable(dl_name, 'i2', ('y', 'x'),
+                                          zlib=True, complevel=4)
+                v.scale_factor = 0.0001  # Gives 0.01% precision
+                v.add_offset = 0.0
+                # Write actual values [0, 1]; netCDF will auto-scale to int16
+                v[:] = np.clip(dl_probs[key], 0.0, 1.0)
+                v.long_name = f'Deep learning probability > {key.replace("p", ".")} mm'
+                v.units = '1 (dimensionless, 0-1 range)'
                 
         ncfile.description = \
             "Precipitation probabilities (Raw GRAF vs Deep Learning)"
@@ -496,8 +459,6 @@ sigma = init_sigma(cyyyymmddhh, clead)
 N = 96
 ny = 1308; nx = 1524
 nchannels = 5
-
-# --- sets thresholds between precipitation categories.
 
 THRESHOLDS = np.arange(0.0, 25.01, 0.25).tolist()
 THRESHOLDS.append(200.0)
@@ -527,21 +488,17 @@ if istat_GRAF == 0:
     model, norm_stats = read_pytorch(cyyyymmddhh, clead, NUM_CLASSES)
     
     if model:
-        
         # --- Build array of features.
-        
         model = model.float()
         Xpredict_all, _ = generate_features(nchannels, cyyyymmddhh, \
             clead, ny, nx, precipitation_GRAF, terrain, \
             t_diff, dt_dlon, dt_dlat, verif_local_time, norm_stats)
 
         # 2. Compute Deep Learning Probabilities
-        
         dl_probs = calc_dl_probabilities(model, Xpredict_all, \
             manhattan, N, ny, nx, NUM_CLASSES)
 
         # 3. Save to NetCDF
-        
         probs_out_dir = '../resnet_data/probs/'
         if not os.path.exists(probs_out_dir):
             try:
@@ -558,3 +515,4 @@ if istat_GRAF == 0:
         print("Model load failed.")
 else:
     print ('GRAF forecast data not found.')
+

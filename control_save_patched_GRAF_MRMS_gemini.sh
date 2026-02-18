@@ -4,60 +4,214 @@
 # uncomment to submit batch jobs on the Cray to extract
 # patches of training data appropriate to the chosen date and lead time
 
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 3
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 6
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 9
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 12
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 15
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 18
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 21
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 24
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 27
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 30
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 33
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 36
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 39
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 42
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 45
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 48
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025010100 3
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025010100 6
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025010100 9
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025010100 12
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025010100 15
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025010100 18
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025010100 21
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025010100 24
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025010100 27
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025010100 30
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025010100 33
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025010100 36
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025010100 39
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025010100 42
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025010100 45
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025010100 48
 
-#sleep 90m
+#sleep 45m
 
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 3
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 6
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 9
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 12
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 15
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 18
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 21
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 24
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 27
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 30
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 33
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 36
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 39
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 42
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 45
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 48
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025020100 3
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025020100 6
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025020100 9
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025020100 12
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025020100 15
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025020100 18
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025020100 21
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025020100 24
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025020100 27
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025020100 30
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025020100 33
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025020100 36
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025020100 39
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025020100 42
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025020100 45
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025020100 48
 
-#sleep 90m
+#sleep 45m
 
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 3
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 6
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 9
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 12
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 15
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 18
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 21
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 24
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 27
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 30
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 33
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 36
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 39
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 42
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 45
-##sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 48
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025030100 3
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025030100 6
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025030100 9
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025030100 12
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025030100 15
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025030100 18
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025030100 21
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025030100 24
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025030100 27
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025030100 30
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025030100 33
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025030100 36
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025030100 39
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025030100 42
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025030100 45
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025030100 48
+
+#sleep 45m
+
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025040100 3
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025040100 6
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025040100 9
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025040100 12
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025040100 15
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025040100 18
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025040100 21
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025040100 24
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025040100 27
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025040100 30
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025040100 33
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025040100 36
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025040100 39
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025040100 42
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025040100 45
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025040100 48
+
+#sleep 45m
+
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025050100 3
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025050100 6
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025050100 9
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025050100 12
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025050100 15
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025050100 18
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025050100 21
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025050100 24
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025050100 27
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025050100 30
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025050100 33
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025050100 36
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025050100 39
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025050100 42
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025050100 45
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025050100 48
+
+#sleep 45m
+
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025060100 3
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025060100 6
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025060100 9
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025060100 12
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025060100 15
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025060100 18
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025060100 21
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025060100 24
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025060100 27
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025060100 30
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025060100 33
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025060100 36
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025060100 39
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025060100 42
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025060100 45
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025060100 48
+
+#sleep 45m
+
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025070100 3
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025070100 6
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025070100 9
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025070100 12
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025070100 15
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025070100 18
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025070100 21
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025070100 24
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025070100 27
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025070100 30
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025070100 33
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025070100 36
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025070100 39
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025070100 42
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025070100 45
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025070100 48
+
+#sleep 45m
+
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025080100 3
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025080100 6
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025080100 9
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025080100 12
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025080100 15
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025080100 18
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025080100 21
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025080100 24
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025080100 27
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025080100 30
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025080100 33
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025080100 36
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025080100 39
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025080100 42
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025080100 45
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025080100 48
+
+#sleep 45m
+
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 3
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 6
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 9
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 12
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 15
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 18
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 21
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 24
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 27
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 30
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 33
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 36
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 39
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 42
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 45
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025090100 48
+
+#sleep 45m
+
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 3
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 6
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 9
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 12
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 15
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 18
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 21
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 24
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 27
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 30
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 33
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 36
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 39
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 42
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 45
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025100100 48
+
+#sleep 45m
+
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 3
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 6
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 9
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 12
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 15
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 18
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 21
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 24
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 27
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 30
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 33
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 36
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 39
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 42
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 45
+#sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025110100 48
+
+#sleep 45m
 
 sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025120100 3
 sbatch control_save_patched_GRAF_MRMS_gemini.slurm 2025120100 6

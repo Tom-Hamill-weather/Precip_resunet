@@ -1,0 +1,7 @@
+https://github.com/HarisIqbal88/PlotNeuralNet/blob/master/README.md
+
+conda activate tex_env
+
+Run with 
+
+bash /opt/anaconda3/bin/PlotNeuralNet/tikzmake.sh my_arch

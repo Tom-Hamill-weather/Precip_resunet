@@ -437,11 +437,11 @@ if istat_GRAF == 0 and istat_prob == 0:
         urcrnrlon = -103
         urcrnrlat = 53.
         lowprob_raw = raw_p2p5mm_prob
-        highprob_raw = raw_p10mm_prob
+        highprob_raw = raw_p5mm_prob
         lowprob_dl = dl_p2p5mm_prob
-        highprob_dl = dl_p10mm_prob
+        highprob_dl = dl_p5mm_prob
         ltitle = 'Prob > 2.5 mm/h'
-        htitle = 'Prob > 10 mm/h'
+        htitle = 'Prob > 5 mm/h'
     else:
         llcrnrlon = -112
         llcrnrlat = 33.
