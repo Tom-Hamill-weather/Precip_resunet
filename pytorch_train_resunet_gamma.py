@@ -162,7 +162,7 @@ USE_WEIGHTED_LOSS = False
 WEIGHT_BY_OBSERVATION = False  # If True, multiply NLL by f(observed_value)
 
 TRAIN_DIR = '../resnet_data/trainings'
-DATA_DIR = '../resnet_data'
+DATA_DIR = '../resnet_data/trainings'
 
 # ====================================================================
 # --- MODEL ARCHITECTURE ---

@@ -272,7 +272,7 @@ def main():
 
         import gc; gc.collect()
 
-    base_path = '../resnet_data'
+    base_path = '../resnet_data/trainings'
     if not os.path.exists(base_path): os.makedirs(base_path)
     save_dataset(f'{base_path}/GRAF_Unet_data_train_{cyyyymmddhh}_{clead}h.cPick', buckets['train'])
     save_dataset(f'{base_path}/GRAF_Unet_data_test_{cyyyymmddhh}_{clead}h.cPick', buckets['val'])

@@ -454,8 +454,8 @@ def read_config_file(config_file):
 
 def load_training_data(cyyyymmddhh, clead):
     """Load training and validation data from pickle files."""
-    train_file = f'../resnet_data/GRAF_Unet_data_train_{cyyyymmddhh}_{clead}h.cPick'
-    val_file = f'../resnet_data/GRAF_Unet_data_test_{cyyyymmddhh}_{clead}h.cPick'
+    train_file = f'../resnet_data/trainings/GRAF_Unet_data_train_{cyyyymmddhh}_{clead}h.cPick'
+    val_file = f'../resnet_data/trainings/GRAF_Unet_data_test_{cyyyymmddhh}_{clead}h.cPick'
 
     print(f'\nLoading training data from: {train_file}')
     if not os.path.exists(train_file):

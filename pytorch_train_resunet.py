@@ -90,7 +90,7 @@ PIXEL_WEIGHTS = torch.tensor(pixel_weights_np, device=DEVICE, dtype=torch.float3
 
 ASYMMETRY_FACTOR = 1.0 
 TRAIN_DIR = '../resnet_data/trainings' 
-DATA_DIR = '../resnet_data'
+DATA_DIR = '../resnet_data/trainings'
 
 # ====================================================================
 # --- Model Architecture ---

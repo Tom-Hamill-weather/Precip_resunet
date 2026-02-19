@@ -469,8 +469,8 @@ def main():
     print(f'INFO: Final patch counts: train={len(buckets["train"]["GRAF"])} '
           f'val={len(buckets["val"]["GRAF"])} pred={len(buckets["pred"]["GRAF"])}')
 
-    base_path = processor.dirs.get("resnet_data_directory", "../resnet_data")
-    if not os.path.exists(base_path): os.makedirs(base_path)
+    base_path = os.path.join(processor.dirs.get("resnet_data_directory", "../resnet_data"), 'trainings')
+    os.makedirs(base_path, exist_ok=True)
     save_dataset(f'{base_path}/GRAF_Unet_data_train_{cyyyymmddhh}_{clead}h.cPick', buckets['train'])
     save_dataset(f'{base_path}/GRAF_Unet_data_test_{cyyyymmddhh}_{clead}h.cPick', buckets['val'])
     save_dataset(f'{base_path}/GRAF_Unet_data_predict_{cyyyymmddhh}_{clead}h.cPick', buckets['pred'])

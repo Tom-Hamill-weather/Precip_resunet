@@ -93,7 +93,7 @@ def main():
     if len(sys.argv) != 3:
         print("Usage: python plot_graf_mrms_samples.py <filename> <sample_index>")
         print("Example: python plot_graf_mrms_samples.py "
-              "../resnet_data/GRAF_Unet_data_train_2025120100_12h.cPick 12")
+              "../resnet_data/trainings/GRAF_Unet_data_train_2025120100_12h.cPick 12")
         sys.exit(1)
 
     filename = sys.argv[1]

@@ -150,7 +150,7 @@ ASYMMETRY_FACTOR = 1.0
 LOSS_POWER = 2.0
 
 TRAIN_DIR = '../resnet_data/trainings'
-DATA_DIR = '../resnet_data'
+DATA_DIR = '../resnet_data/trainings'
 
 # ====================================================================
 # --- MODEL ARCHITECTURE ---
