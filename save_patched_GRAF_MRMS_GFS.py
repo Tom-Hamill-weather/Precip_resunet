@@ -175,7 +175,16 @@ class GRAFDataProcessor:
                 # Read the three variables at the selected step
                 pwat = nc.variables['pwat'][step_idx, :, :]   # (latitude, longitude)
                 r = nc.variables['r'][step_idx, :, :]         # (latitude, longitude)
-                cape = nc.variables['cape'][step_idx, :, :]   # (latitude, longitude)
+
+                # CAPE may have an extra pressureFromGroundLayer dimension in some files.
+                # Collapse it by taking the max (most unstable CAPE) regardless of axis position.
+                cape_var = nc.variables['cape']
+                cape_raw = cape_var[step_idx, :]
+                if 'pressureFromGroundLayer' in cape_var.dimensions:
+                    level_axis = list(cape_var.dimensions[1:]).index('pressureFromGroundLayer')
+                    cape = np.max(cape_raw, axis=level_axis)
+                else:
+                    cape = cape_raw
 
                 # Handle NaN values
                 pwat = np.where(np.isnan(pwat), 0.0, pwat)
