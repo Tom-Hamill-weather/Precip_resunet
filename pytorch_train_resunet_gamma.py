@@ -161,8 +161,9 @@ EARLY_STOPPING_PATIENCE = 3
 USE_WEIGHTED_LOSS = False
 WEIGHT_BY_OBSERVATION = False  # If True, multiply NLL by f(observed_value)
 
-TRAIN_DIR = '../resnet_data/trainings'
-DATA_DIR = '../resnet_data/trainings'
+_trainings_abs = '/data2/resnet_data/trainings'
+TRAIN_DIR = _trainings_abs if os.path.exists(_trainings_abs) else '../resnet_data/trainings'
+DATA_DIR  = TRAIN_DIR
 
 # ====================================================================
 # --- MODEL ARCHITECTURE ---

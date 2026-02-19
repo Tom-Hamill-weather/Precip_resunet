@@ -454,8 +454,10 @@ def read_config_file(config_file):
 
 def load_training_data(cyyyymmddhh, clead):
     """Load training and validation data from pickle files."""
-    train_file = f'../resnet_data/trainings/GRAF_Unet_data_train_{cyyyymmddhh}_{clead}h.cPick'
-    val_file = f'../resnet_data/trainings/GRAF_Unet_data_test_{cyyyymmddhh}_{clead}h.cPick'
+    _trainings_abs = '/data2/resnet_data/trainings'
+    _data_dir = _trainings_abs if os.path.exists(_trainings_abs) else '../resnet_data/trainings'
+    train_file = f'{_data_dir}/GRAF_Unet_data_train_{cyyyymmddhh}_{clead}h.cPick'
+    val_file = f'{_data_dir}/GRAF_Unet_data_test_{cyyyymmddhh}_{clead}h.cPick'
 
     print(f'\nLoading training data from: {train_file}')
     if not os.path.exists(train_file):
@@ -732,7 +734,8 @@ if __name__ == '__main__':
     )
 
     # Check for existing checkpoints
-    checkpoint_dir = '../resnet_data/trainings'
+    _trainings_abs = '/data2/resnet_data/trainings'
+    checkpoint_dir = _trainings_abs if os.path.exists(_trainings_abs) else '../resnet_data/trainings'
     os.makedirs(checkpoint_dir, exist_ok=True)
 
     checkpoint_pattern = f'resunet_quantiler_{cyyyymmddhh}_{clead}h_epoch_*.pth'

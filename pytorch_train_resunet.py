@@ -89,8 +89,9 @@ pixel_weights_np = np.clip(pixel_weights_np, a_min=None, a_max=3.0)
 PIXEL_WEIGHTS = torch.tensor(pixel_weights_np, device=DEVICE, dtype=torch.float32)
 
 ASYMMETRY_FACTOR = 1.0 
-TRAIN_DIR = '../resnet_data/trainings' 
-DATA_DIR = '../resnet_data/trainings'
+_trainings_abs = '/data2/resnet_data/trainings'
+TRAIN_DIR = _trainings_abs if os.path.exists(_trainings_abs) else '../resnet_data/trainings'
+DATA_DIR  = TRAIN_DIR
 
 # ====================================================================
 # --- Model Architecture ---

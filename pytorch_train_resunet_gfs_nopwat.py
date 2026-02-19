@@ -149,8 +149,9 @@ ASYMMETRY_FACTOR = 1.0
 
 LOSS_POWER = 2.0
 
-TRAIN_DIR = '../resnet_data/trainings'
-DATA_DIR = '../resnet_data/trainings'
+_trainings_abs = '/data2/resnet_data/trainings'
+TRAIN_DIR = _trainings_abs if os.path.exists(_trainings_abs) else '../resnet_data/trainings'
+DATA_DIR  = TRAIN_DIR
 
 # ====================================================================
 # --- MODEL ARCHITECTURE ---
