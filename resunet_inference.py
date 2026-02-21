@@ -40,11 +40,18 @@ np.set_printoptions(precision=3, suppress=True)
 
 if torch.cuda.is_available():
     DEVICE = torch.device("cuda")
+    print(f"✓ GPU AVAILABLE - Using CUDA device: {torch.cuda.get_device_name(0)}")
+    print(f"  CUDA Version: {torch.version.cuda}")
+    print(f"  Number of GPUs: {torch.cuda.device_count()}")
 elif torch.backends.mps.is_available():
     DEVICE = torch.device("mps")
+    print("✓ Using Apple MPS (Metal Performance Shaders) device")
 else:
     DEVICE = torch.device("cpu")
-print (f"Running on: {DEVICE}")
+    print("⚠ WARNING: No GPU detected - using CPU (this will be slow)")
+    print("  PyTorch CUDA available:", torch.cuda.is_available())
+    print("  PyTorch version:", torch.__version__)
+print(f"Running on: {DEVICE}")
 
 TRAIN_DIR = '../resnet_data/trainings'
 
