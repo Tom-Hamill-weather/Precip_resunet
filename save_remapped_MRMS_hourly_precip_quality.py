@@ -15,6 +15,7 @@ import matplotlib as mpl
 import _pickle as cPickle
 import scipy.stats as stats
 from datetime import datetime
+from configparser import ConfigParser
 
 # ----------------------------------------------------------
 
@@ -179,17 +180,37 @@ def save_precip_quality_to_netCDF(output_directory, \
 # =============================================================
 # =============================================================
 
+def detect_config():
+    """Select the appropriate config file based on the runtime environment."""
+    if os.path.exists('/data2/resnet_data'):
+        return 'config_aws.ini'
+    elif os.path.exists('/storage2/library/archive/grid'):
+        return 'config_hdo.ini'
+    else:
+        return 'config_laptop.ini'
+
+config_file = detect_config()
+print(f'INFO: Using config file: {config_file}')
+config = ConfigParser()
+config.read(config_file)
+dirs = config['DIRECTORIES']
+
+working_dir  = dirs.get('mrms_working_directory', '/storage/home/thamill/work/')
+output_dir   = dirs.get('mrms_data_directory',    '/storage/home/thamill/MRMS/')
+terrain_file = dirs.get('terrain_file',            'GRAF_CONUS_terrain_info.nc')
+
+# Ensure working dir exists
+os.makedirs(working_dir, exist_ok=True)
+
 cyyyymmddhh_begin = sys.argv[1]
 cyyyymmddhh_end = sys.argv[2]
 dates = daterange(cyyyymmddhh_begin, cyyyymmddhh_end, 1)
 print ('****** save_remapped_MRMS_hourly_precip_quality.py '+ \
     cyyyymmddhh_begin + ' ' + cyyyymmddhh_end)
-working_dir = '/storage/home/thamill/work/'
-output_dir = '/storage/home/thamill/MRMS/'
 
 # ---- Read GRAF CONUS grid lat/lon
 
-infile = 'GRAF_CONUS_terrain_info.nc'
+infile = terrain_file
 nc = Dataset(infile,'r')
 lats_GRAF = nc.variables['lats'][:,:]
 lons_GRAF = nc.variables['lons'][:,:]
@@ -257,22 +278,30 @@ for idate, date in enumerate(dates):
         lons_GRAF, lats_GRAF)
     print ('np.shape(MRMS_precip) = ', np.shape(MRMS_precip))
 
+    # ---- Clean up temporary grib files for this date.
+
+    for tmp_file in [
+        working_dir + 'MRMS_QPE_01h_Pass2_precip_' + date + '.grib2',
+        working_dir + date + '_data_quality.grib',
+    ]:
+        if os.path.exists(tmp_file):
+            os.remove(tmp_file)
+
     # --- Save to netCDF file.
-    
+
+    if istat_MRMS != 0 or istat_quality != 0:
+        print(f'  WARNING: Skipping save for {date} due to read error '
+              f'(istat_MRMS={istat_MRMS}, istat_quality={istat_quality})')
+        continue
+
     now = datetime.now()
     current_time = now.strftime("%H:%M:%S")
     print ('saving data ', current_time)
-    
+
     cyyyymm = date[0:6]
-    output_directory = output_dir + cyyyymm + '/'
-    fexist = os.path.exists(output_directory)
-    print (output_directory)
-    if fexist == False:
-        cmd = 'mkdir '+output_directory
-        print ('cmd = ', cmd)
-        istat = os.system(cmd)
-        print ('mkdir istat: ',istat)
-    
+    output_directory = os.path.join(output_dir, cyyyymm) + '/'
+    os.makedirs(output_directory, exist_ok=True)
+
     istat = save_precip_quality_to_netCDF(output_directory, \
         ny_GRAF, nx_GRAF, lons_GRAF, lats_GRAF, \
         MRMS_precip, MRMS_quality, date)

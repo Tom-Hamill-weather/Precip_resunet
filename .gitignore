@@ -1,0 +1,28 @@
+# Python bytecode cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+
+# Data files (usually too large)
+*.cPick
+*.nc
+*.grb2
+*.grib2
+*.tar
+*.tar.gz
