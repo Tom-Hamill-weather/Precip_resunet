@@ -416,7 +416,11 @@ class GammaNLLLoss(nn.Module):
             p0_clamped = torch.clamp(p0, min=self.epsilon, max=1.0 - self.epsilon)
 
             # NLL for mixture: -log(1 - p₀) + NLL_gamma
-            nll_mixture = -torch.log(1.0 - p0_clamped)
+            # Clamp the log argument directly to prevent floating point precision issues
+            one_minus_p0 = torch.clamp(1.0 - p0_clamped, min=self.epsilon)
+            nll_mixture = -torch.log(one_minus_p0)
+            # Cap the mixture NLL to prevent inf propagation
+            nll_mixture = torch.clamp(nll_mixture, max=20.0)
 
             # Gamma NLL: log(Γ(α)) - (α-1)×log(y) + (α-1)×log(θ) + y/θ + log(θ)
             # Simplified: lgamma(α) - (α-1)×log(y/θ) + y/θ + log(θ)
