@@ -21,7 +21,13 @@ from dateutils import dateshift
 warnings.filterwarnings("ignore")
 np.set_printoptions(precision=3, suppress=True)
 
-TRAIN_DIR = '../resnet_data/trainings'
+# Auto-detect data directory (AWS vs laptop)
+if os.path.exists('/data/resnet_data'):
+    # AWS G5 instance
+    TRAIN_DIR = '/data/resnet_data/trainings'
+else:
+    # Laptop
+    TRAIN_DIR = '../resnet_data/trainings'
 
 # --------------------------------------------------------------
 

@@ -163,8 +163,15 @@ EARLY_STOPPING_PATIENCE = 3
 USE_WEIGHTED_LOSS = False
 WEIGHT_BY_OBSERVATION = False  # If True, multiply NLL by f(observed_value)
 
-TRAIN_DIR = '../resnet_data/trainings'
-DATA_DIR = '../resnet_data'
+# Auto-detect data directory (AWS vs laptop)
+if os.path.exists('/data/resnet_data'):
+    # AWS G5 instance
+    DATA_DIR = '/data/resnet_data'
+    TRAIN_DIR = '/data/resnet_data/trainings'
+else:
+    # Laptop
+    DATA_DIR = '../resnet_data'
+    TRAIN_DIR = '../resnet_data/trainings'
 
 # ====================================================================
 # --- MODEL ARCHITECTURE ---

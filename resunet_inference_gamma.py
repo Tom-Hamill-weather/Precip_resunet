@@ -71,8 +71,15 @@ else:
     DEVICE = torch.device("cpu")
 print(f"Running on: {DEVICE}")
 
-TRAIN_DIR = '../resnet_data/trainings'
-GFS_DATA_DIR = '../resnet_data/gfs'
+# Auto-detect data directory (AWS vs laptop)
+if os.path.exists('/data/resnet_data'):
+    # AWS G5 instance
+    TRAIN_DIR = '/data/resnet_data/trainings'
+    GFS_DATA_DIR = '/data/resnet_data/gfs'
+else:
+    # Laptop
+    TRAIN_DIR = '../resnet_data/trainings'
+    GFS_DATA_DIR = '../resnet_data/gfs'
 
 # --------------------------------------------------------------
 
