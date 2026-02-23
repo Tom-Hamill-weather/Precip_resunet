@@ -453,12 +453,27 @@ class GRAF_Dataset(Dataset):
                 print(f"    Shape: {self.mrms.shape}, Size: {self.mrms.nbytes / 1024**2:.1f} MB")
 
                 print("  Loading quality mask...")
-                self.qual = cPickle.load(f)
-                print(f"    Shape: {self.qual.shape}, Size: {self.qual.nbytes / 1024**2:.1f} MB")
+                qual = cPickle.load(f)
+                print(f"    Shape: {qual.shape}, Size: {qual.nbytes / 1024**2:.1f} MB")
+
+                # Apply quality mask to MRMS immediately and delete qual to save memory
+                print("    Applying quality mask to MRMS...")
+                is_bad = (qual <= 0.01)
+                self.mrms[is_bad] = -1  # ignore_index
+                print(f"    Marked {is_bad.sum()} bad pixels as -1")
+                print("    Deleting quality mask to save memory...")
+                del qual, is_bad
+                gc.collect()
 
                 print("  Loading terrain × GRAF...")
                 self.terdiff_graf = cPickle.load(f)
-                print(f"    Shape: {self.terdiff_graf.shape}, Size: {self.terdiff_graf.nbytes / 1024**2:.1f} MB")
+                print(f"    Shape: {self.terdiff_graf.shape}, Dtype: {self.terdiff_graf.dtype}, Size: {self.terdiff_graf.nbytes / 1024**2:.1f} MB")
+                # Convert to float32 if needed to save memory
+                if self.terdiff_graf.dtype == np.float64:
+                    print("    Converting terrain × GRAF from float64 to float32...")
+                    self.terdiff_graf = self.terdiff_graf.astype(np.float32)
+                    print(f"    New size: {self.terdiff_graf.nbytes / 1024**2:.1f} MB")
+                    gc.collect()
 
                 print("  Loading terrain diff...")
                 self.diff = cPickle.load(f)
@@ -564,10 +579,15 @@ class GRAF_Dataset(Dataset):
         print_memory_usage("After normalizing all features")
 
     def normalize(self, data, idx):
+        """Normalize in-place to avoid creating temporary arrays."""
         vmin = self.stats['min'][idx]
         vmax = self.stats['max'][idx]
         denom = vmax - vmin if (vmax - vmin) > 1e-6 else 1.0
-        return ((data - vmin) / denom).astype(np.float32)
+
+        # In-place operations to minimize memory
+        data -= vmin
+        data /= denom
+        return data.astype(np.float32)
 
     def __len__(self):
         return len(self.graf)
@@ -589,14 +609,8 @@ class GRAF_Dataset(Dataset):
                      self.terdiff_graf[idx], self.graf_rh_interaction[idx],
                      self.dlon[idx], self.dlat[idx]], axis=0)
 
-        # Return continuous MRMS values (not class indices)
-        y_raw = self.mrms[idx]
-        q_mask = self.qual[idx]
-
-        # Mark bad quality pixels
-        is_bad = (q_mask <= 0.01)
-        y = y_raw.copy()
-        y[is_bad] = -1  # ignore_index
+        # Get MRMS values (quality mask already applied during loading)
+        y = self.mrms[idx].copy()
 
         if self.train:
             x, y = self.apply_augmentation(x, y)
@@ -997,7 +1011,12 @@ def train_model(date_str, lead_time_str):
     print(f"  Total: {train_size_gb + val_size_gb:.2f} GB")
 
     train_dataset = GRAF_Dataset(train_pickle, train=True)
+
+    print("\n" + "="*70)
+    print("Loading validation dataset...")
+    print("="*70)
     val_dataset = GRAF_Dataset(val_pickle, normalization_stats=train_dataset.stats, train=False)
+    print_memory_usage("After loading both train and validation datasets")
 
     print(f"\nDataset sizes:")
     print(f"  Training samples: {len(train_dataset)}")
