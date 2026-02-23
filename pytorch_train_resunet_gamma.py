@@ -946,9 +946,9 @@ def train_model(date_str, lead_time_str):
 
     print_memory_usage("At start of training")
 
-    # Load data
-    train_pickle = f"{DATA_DIR}/GRAF_Unet_data_train_{date_str}_{lead_time_str}h.cPick"
-    val_pickle = f"{DATA_DIR}/GRAF_Unet_data_test_{date_str}_{lead_time_str}h.cPick"
+    # Load data (pickle files are in trainings subdirectory)
+    train_pickle = f"{TRAIN_DIR}/GRAF_Unet_data_train_{date_str}_{lead_time_str}h.cPick"
+    val_pickle = f"{TRAIN_DIR}/GRAF_Unet_data_test_{date_str}_{lead_time_str}h.cPick"
 
     # Check if files exist
     if not os.path.exists(train_pickle):
