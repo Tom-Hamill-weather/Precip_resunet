@@ -806,33 +806,20 @@ def initialize_output_layer(model, climatology):
     print()
 
 def print_diagnostics(epoch, batch_idx, loss_val, logits, targets,
-                     shape_min, scale_min, model, stats):
+                     shape_min, scale_min, model, stats, print_explanation=False):
     """
     Print diagnostics during training showing parameter distributions.
     Includes synthetic tests for 0mm and 1mm GRAF precipitation.
     """
-    # Print explanation on first call
-    if epoch == 0 and batch_idx == 0:
-        print("\n" + "="*82)
-        print("DIAGNOSTIC OUTPUT EXPLANATION")
-        print("="*82)
-        print("\nThis shows how the model predicts precipitation distributions.")
-        print("\nFor real data, we show:")
-        print("  - Average predicted parameters (fraction_zero, shape, scale)")
-        print("  - Implied distribution characteristics")
-        print("  - Comparison with observed statistics")
-        print("\nFor synthetic tests, we show predicted distributions for:")
-        print("  Syn(0mm): Dry conditions (GRAF=0mm, RH=20%, flat terrain)")
-        print("  Syn(1mm): Light rain (GRAF=1mm, RH=80%, flat terrain)")
-        print("\nWhat to look for:")
-        print("  - Syn(0mm) should predict high fraction_zero (>0.8)")
-        print("  - Syn(1mm) should predict moderate fraction_zero (~0.3-0.5)")
-        print("  - Syn(1mm) should predict mean around 1-3mm")
-        print("  - If Syn(0mm) predicts low fraction_zero, model has wet bias")
-        print("="*82 + "\n")
+    # Print brief explanation on first call only
+    if print_explanation:
+        print("\nDiagnostic output shows:")
+        print("  - Real data: predicted vs observed precipitation statistics")
+        print("  - Synthetic tests:")
+        print("    * Syn(0mm): Dry conditions (GRAF=0mm, RH=20%) - should predict high P(zero)")
+        print("    * Syn(1mm): Light rain (GRAF=1mm, RH=80%) - should predict mean ~1-3mm")
 
-    print(f"\n--- Epoch {epoch+1}, Batch {batch_idx} ---")
-    print(f"Loss (NLL): {loss_val:.4f}")
+    print(f"\nTraining Loss (NLL): {loss_val:.4f}")
 
     # Save training state
     was_training = model.training
@@ -988,8 +975,6 @@ def train_model(date_str, lead_time_str):
     print(f"Device: {DEVICE} | Batch Size: {BATCH_SIZE} | AMP: {USE_AMP}")
     print("="*70 + "\n")
 
-    print_memory_usage("At start of training")
-
     # Load data (pickle files are in trainings subdirectory)
     train_pickle = f"{TRAIN_DIR}/GRAF_Unet_data_train_{date_str}_{lead_time_str}h.cPick"
     val_pickle = f"{TRAIN_DIR}/GRAF_Unet_data_test_{date_str}_{lead_time_str}h.cPick"
@@ -1002,21 +987,12 @@ def train_model(date_str, lead_time_str):
         print(f"ERROR: Validation pickle not found: {val_pickle}")
         sys.exit(1)
 
-    # Check file sizes
-    train_size_gb = os.path.getsize(train_pickle) / 1024**3
-    val_size_gb = os.path.getsize(val_pickle) / 1024**3
-    print(f"\nPickle file sizes:")
-    print(f"  Training: {train_size_gb:.2f} GB")
-    print(f"  Validation: {val_size_gb:.2f} GB")
-    print(f"  Total: {train_size_gb + val_size_gb:.2f} GB")
+    print(f"Loading training data from {train_pickle}...")
 
     train_dataset = GRAF_Dataset(train_pickle, train=True)
 
-    print("\n" + "="*70)
-    print("Loading validation dataset...")
-    print("="*70)
+    print("\nLoading validation dataset...")
     val_dataset = GRAF_Dataset(val_pickle, normalization_stats=train_dataset.stats, train=False)
-    print_memory_usage("After loading both train and validation datasets")
 
     print(f"\nDataset sizes:")
     print(f"  Training samples: {len(train_dataset)}")
@@ -1025,36 +1001,19 @@ def train_model(date_str, lead_time_str):
     print(f"  Output: 3 parameters (fraction_zero, shape, scale)")
 
     # Compute climatology for initialization
-    print("\n" + "="*70)
-    print("COMPUTING CLIMATOLOGY")
-    print("="*70)
     climatology = compute_gamma_climatology(train_dataset)
-    print_memory_usage("After computing climatology")
 
     # Create dataloaders
-    print("\nCreating data loaders...")
-    print(f"  Batch size: {BATCH_SIZE}")
-    print(f"  Num workers: {NUM_WORKERS}")
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE,
                               shuffle=True, num_workers=NUM_WORKERS)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE,
                            shuffle=False, num_workers=NUM_WORKERS)
-    print_memory_usage("After creating dataloaders")
 
     # Create model with 3 outputs
-    print("\nCreating model...")
     model = AttnResUNet(in_channels=7, num_outputs=3)
-
-    # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"  Total parameters: {total_params:,}")
-    print(f"  Trainable parameters: {trainable_params:,}")
-    print(f"  Model size: {total_params * 4 / 1024**2:.1f} MB (fp32)")
-
-    print(f"\nMoving model to device: {DEVICE}")
+    print(f"\nModel: {total_params:,} parameters ({total_params * 4 / 1024**2:.1f} MB)")
     model = model.to(DEVICE)
-    print_memory_usage("After creating model")
 
     # Initialize output layer with climatology
     initialize_output_layer(model, climatology)
@@ -1106,9 +1065,7 @@ def train_model(date_str, lead_time_str):
 
     print(f"Starting training from epoch {start_epoch+1}...")
     print(f"Training batches per epoch: {len(train_loader)}")
-    print(f"Validation batches per epoch: {len(val_loader)}")
-    print(f"Diagnostic output frequency: once per epoch\n")
-    print_memory_usage("Before training loop")
+    print(f"Validation batches per epoch: {len(val_loader)}\n")
 
     # Training loop
     for epoch in range(start_epoch, NUM_EPOCHS):
@@ -1116,11 +1073,6 @@ def train_model(date_str, lead_time_str):
         model.train()
         running_loss = 0.0
         optimizer.zero_grad()
-
-        print(f"\n{'='*70}")
-        print(f"Starting Epoch {epoch+1}/{NUM_EPOCHS}")
-        print(f"{'='*70}")
-        print_memory_usage(f"Start of epoch {epoch+1}")
 
         for i, (inputs, targets) in enumerate(train_loader):
             try:
@@ -1147,32 +1099,23 @@ def train_model(date_str, lead_time_str):
 
                 running_loss += loss.item() * ACCUMULATION_STEPS
 
-                # Print progress every 10 batches
-                if i % 10 == 0:
-                    progress = (i + 1) / len(train_loader) * 100
-                    print(f"  Batch {i+1}/{len(train_loader)} ({progress:.1f}%) | Loss: {loss.item() * ACCUMULATION_STEPS:.4f}")
-
-                # Print detailed diagnostics and clear cache every 50 batches
-                if i % 50 == 0 and i > 0:
-                    print_memory_usage(f"Epoch {epoch+1}, Batch {i}")
+                # Print progress at 25%, 50%, 75%
+                progress_pct = (i + 1) / len(train_loader)
+                if i > 0 and (abs(progress_pct - 0.25) < 0.01 or
+                             abs(progress_pct - 0.50) < 0.01 or
+                             abs(progress_pct - 0.75) < 0.01):
+                    print(f"  Epoch {epoch+1} - {progress_pct*100:.0f}% complete | Loss: {loss.item() * ACCUMULATION_STEPS:.4f}")
 
                 # Clear GPU cache periodically
-                if i % 100 == 0 and DEVICE.type == 'cuda':
+                if i % 100 == 0 and i > 0 and DEVICE.type == 'cuda':
                     torch.cuda.empty_cache()
 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
-                    print(f"\n{'='*70}")
-                    print("CUDA OUT OF MEMORY ERROR")
-                    print(f"{'='*70}")
-                    print(f"Error occurred at Epoch {epoch+1}, Batch {i+1}")
-                    print(f"Batch shape: inputs={inputs.shape if 'inputs' in locals() else 'N/A'}")
-                    print(f"Error message: {e}")
-                    print_memory_usage("At OOM error")
+                    print(f"\nCUDA OOM at Epoch {epoch+1}, Batch {i+1}")
+                    print(f"Batch shape: {inputs.shape if 'inputs' in locals() else 'N/A'}")
                     if DEVICE.type == 'cuda':
                         torch.cuda.empty_cache()
-                        print("\nCleared CUDA cache")
-                        print_memory_usage("After clearing cache")
                     raise
                 else:
                     raise
@@ -1202,10 +1145,14 @@ def train_model(date_str, lead_time_str):
 
         avg_val = val_loss / len(val_loader)
 
-        # Print epoch-end diagnostics
+        # Print epoch-end diagnostics (includes synthetic forecast tests)
+        print(f"\n{'='*82}")
+        print(f"EPOCH {epoch+1} DIAGNOSTICS")
+        print(f"{'='*82}")
         print_diagnostics(epoch, len(train_loader)-1, avg_train_loss,
                          outputs, targets, climatology['shape_min'],
-                         climatology['scale_min'], model, train_dataset.stats)
+                         climatology['scale_min'], model, train_dataset.stats,
+                         print_explanation=(epoch==start_epoch))
 
         # Update scheduler
         old_lr = optimizer.param_groups[0]['lr']
