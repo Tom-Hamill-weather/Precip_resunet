@@ -884,57 +884,13 @@ def initialize_output_layer(model, climatology):
 def print_diagnostics(epoch, batch_idx, loss_val, logits, targets,
                      shape_min, scale_min, model, stats, print_explanation=False):
     """
-    Print diagnostics during training showing parameter distributions.
-    Includes synthetic tests for 0mm and 1mm GRAF precipitation.
+    Print compact diagnostics with synthetic tests for 0mm and 1mm GRAF precipitation.
     """
-    # Print brief explanation on first call only
-    if print_explanation:
-        print("\nDiagnostic output shows:")
-        print("  - Real data: predicted vs observed precipitation statistics")
-        print("  - Synthetic tests:")
-        print("    * Syn(0mm): Dry conditions (GRAF=0mm, RH=20%) - should predict high P(zero)")
-        print("    * Syn(1mm): Light rain (GRAF=1mm, RH=80%) - should predict mean ~1-3mm")
-
-    print(f"\nTraining Loss (NLL): {loss_val:.4f}")
-
     # Save training state
     was_training = model.training
     model.eval()
 
     with torch.no_grad():
-        # ==========================================
-        # Real Data Statistics
-        # ==========================================
-        fraction_zero = torch.sigmoid(logits[:, 0, :, :])
-        shape = shape_min + F.softplus(logits[:, 1, :, :])
-        scale = shape_min + F.softplus(logits[:, 2, :, :])
-
-        valid = (targets >= 0)
-
-        if valid.sum() > 0:
-            # Predicted statistics
-            p0 = fraction_zero[valid].mean().item()
-            alpha = shape[valid].mean().item()
-            theta = scale[valid].mean().item()
-            pred_mean = alpha * theta
-            pred_std = np.sqrt(alpha * theta**2)
-
-            # Observed statistics
-            obs_zero_frac = (targets[valid] == 0).float().mean().item()
-            obs_mean = targets[valid].mean().item()
-            obs_std = targets[valid].std().item()
-
-            print(f"\nReal data - Predicted parameters:")
-            print(f"  Fraction zero: {p0:.3f}")
-            print(f"  Shape (α):     {alpha:.3f}")
-            print(f"  Scale (θ):     {theta:.3f}")
-            print(f"  Implied mean:  {pred_mean:.3f} mm")
-            print(f"  Implied std:   {pred_std:.3f} mm")
-
-            print(f"\nReal data - Observed statistics:")
-            print(f"  Fraction zero: {obs_zero_frac:.3f}")
-            print(f"  Mean:          {obs_mean:.3f} mm")
-            print(f"  Std:           {obs_std:.3f} mm")
 
         # ==========================================
         # Synthetic Tests
@@ -1015,24 +971,8 @@ def print_diagnostics(epoch, batch_idx, loss_val, logits, targets,
         # Light rain case: 1mm GRAF, 80% RH
         syn_1mm = run_synthetic(1.0, 80.0)
 
-        print(f"\nSynthetic test - Dry conditions (GRAF=0mm, RH=20%):")
-        print(f"  P(zero):       {syn_0mm['p0']:.3f}")
-        print(f"  Shape (α):     {syn_0mm['alpha']:.3f}")
-        print(f"  Scale (θ):     {syn_0mm['theta']:.3f}")
-        print(f"  Mean|wet:      {syn_0mm['mean']:.3f} mm")
-        print(f"  P(>0.25mm):    {syn_0mm['p_gt_025']:.3f}")
-        print(f"  P(>1mm):       {syn_0mm['p_gt_1']:.3f}")
-
-        print(f"\nSynthetic test - Light rain (GRAF=1mm, RH=80%):")
-        print(f"  P(zero):       {syn_1mm['p0']:.3f}")
-        print(f"  Shape (α):     {syn_1mm['alpha']:.3f}")
-        print(f"  Scale (θ):     {syn_1mm['theta']:.3f}")
-        print(f"  Mean|wet:      {syn_1mm['mean']:.3f} mm")
-        print(f"  P(>0.25mm):    {syn_1mm['p_gt_025']:.3f}")
-        print(f"  P(>1mm):       {syn_1mm['p_gt_1']:.3f}")
-        print(f"  P(>5mm):       {syn_1mm['p_gt_5']:.3f}")
-
-        print("-" * 82)
+        print(f"  Syn(0mm): P(zero)={syn_0mm['p0']:.3f}, α={syn_0mm['alpha']:.2f}, θ={syn_0mm['theta']:.2f}, P(>0.25mm)={syn_0mm['p_gt_025']:.3f}, P(>1mm)={syn_0mm['p_gt_1']:.3f}")
+        print(f"  Syn(1mm): P(zero)={syn_1mm['p0']:.3f}, α={syn_1mm['alpha']:.2f}, θ={syn_1mm['theta']:.2f}, P(>0.25mm)={syn_1mm['p_gt_025']:.3f}, P(>1mm)={syn_1mm['p_gt_1']:.3f}, P(>5mm)={syn_1mm['p_gt_5']:.3f}")
 
     # Restore training state
     if was_training:
@@ -1185,13 +1125,6 @@ def train_model(date_str, lead_time_str):
 
                 running_loss += loss.item() * ACCUMULATION_STEPS
 
-                # Print progress at 25%, 50%, 75%
-                progress_pct = (i + 1) / len(train_loader)
-                if i > 0 and (abs(progress_pct - 0.25) < 0.01 or
-                             abs(progress_pct - 0.50) < 0.01 or
-                             abs(progress_pct - 0.75) < 0.01):
-                    print(f"  Epoch {epoch+1} - {progress_pct*100:.0f}% complete | Loss: {loss.item() * ACCUMULATION_STEPS:.4f}")
-
                 # Clear GPU cache periodically
                 if i % 100 == 0 and i > 0 and DEVICE.type == 'cuda':
                     torch.cuda.empty_cache()
@@ -1234,10 +1167,7 @@ def train_model(date_str, lead_time_str):
 
         avg_val = val_loss / len(val_loader)
 
-        # Print epoch-end diagnostics (includes synthetic forecast tests)
-        print(f"\n{'='*82}")
-        print(f"EPOCH {epoch+1} DIAGNOSTICS")
-        print(f"{'='*82}")
+        # Print compact diagnostics with synthetic tests
         print_diagnostics(epoch, len(train_loader)-1, avg_train_loss,
                          outputs, targets, climatology['shape_min'],
                          climatology['scale_min'], model, train_dataset.stats,
