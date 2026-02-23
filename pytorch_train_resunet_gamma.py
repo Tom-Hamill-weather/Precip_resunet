@@ -520,25 +520,39 @@ class GRAF_Dataset(Dataset):
                 print("  Loading MRMS...")
                 self.mrms = cPickle.load(f)
                 print(f"    Shape: {self.mrms.shape}, Size: {self.mrms.nbytes / 1024**2:.1f} MB")
-                print(f"    MRMS range before clipping: [{self.mrms.min():.2f}, {self.mrms.max():.2f}]")
+                print(f"    MRMS range before filtering: [{self.mrms.min():.2f}, {self.mrms.max():.2f}]")
 
-                # Clip MRMS to reasonable range (same as GRAF normalization max)
-                print("    Clipping MRMS to [0, 75] mm...")
-                self.mrms = np.clip(self.mrms, 0.0, 75.0)
-                print(f"    MRMS range after clipping: [{self.mrms.min():.2f}, {self.mrms.max():.2f}]")
+                # Mask bad data (negative values or extreme outliers > 200 mm)
+                print("    Masking bad MRMS data (< 0 or > 200 mm)...")
+                is_bad_data = (self.mrms < 0.0) | (self.mrms > 200.0)
+                n_bad_data = is_bad_data.sum()
+                self.mrms[is_bad_data] = -1.0  # Mark as invalid
+                print(f"    Marked {n_bad_data} pixels with bad values as -1.0")
+
+                # Clip remaining valid MRMS to [0, 75] for consistency with GRAF normalization
+                valid_mask = (self.mrms >= 0.0)
+                if valid_mask.any():
+                    print("    Clipping valid MRMS to [0, 75] mm...")
+                    self.mrms[valid_mask] = np.clip(self.mrms[valid_mask], 0.0, 75.0)
+                    print(f"    Valid MRMS range: [{self.mrms[valid_mask].min():.2f}, {self.mrms[valid_mask].max():.2f}]")
 
                 print("  Loading quality mask...")
                 qual = cPickle.load(f)
                 print(f"    Shape: {qual.shape}, Size: {qual.nbytes / 1024**2:.1f} MB")
 
-                # Apply quality mask to MRMS immediately and delete qual to save memory
+                # Apply quality mask to MRMS (in addition to bad data mask)
                 print("    Applying quality mask to MRMS...")
-                is_bad = (qual <= 0.01)
-                self.mrms[is_bad] = -1.0  # ignore_index (use float to match dtype)
-                print(f"    Marked {is_bad.sum()} bad pixels as -1.0")
-                print(f"    Final MRMS range: [{self.mrms[self.mrms >= 0].min():.2f}, {self.mrms[self.mrms >= 0].max():.2f}] (valid pixels)")
+                is_bad_qual = (qual <= 0.01)
+                self.mrms[is_bad_qual] = -1.0  # ignore_index (use float to match dtype)
+                print(f"    Marked {is_bad_qual.sum()} additional pixels with poor quality as -1.0")
+                valid_final = (self.mrms >= 0)
+                n_valid = valid_final.sum()
+                n_total = self.mrms.size
+                print(f"    Final valid pixels: {n_valid} / {n_total} ({100*n_valid/n_total:.1f}%)")
+                if n_valid > 0:
+                    print(f"    Final valid MRMS range: [{self.mrms[valid_final].min():.2f}, {self.mrms[valid_final].max():.2f}]")
                 print("    Deleting quality mask to save memory...")
-                del qual, is_bad
+                del qual, is_bad_qual, is_bad_data, valid_mask
                 gc.collect()
 
                 print("  Loading terrain × GRAF...")
