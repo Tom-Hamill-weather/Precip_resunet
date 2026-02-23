@@ -378,18 +378,21 @@ class GammaNLLLoss(nn.Module):
         scale = torch.clamp(scale, min=self.scale_min, max=self.scale_max)
 
         # Create mask for valid pixels (not bad quality)
-        # Allow some tolerance for floating point comparison
-        valid_mask = (targets >= 0.0) & (targets <= 75.0)
+        # Valid pixels: 0 <= target <= 75
+        # Invalid pixels: target = -1 (ignore_index from bad quality mask)
+        valid_mask = (targets >= -0.5)  # -1 will be False, everything else True
 
-        # Clip targets to valid range as a safety measure
-        targets_clipped = torch.clamp(targets, min=0.0, max=75.0)
+        # Clip valid targets to [0, 75] range only where mask is valid
+        # Keep invalid targets as-is (-1) so they remain excluded
+        targets_safe = targets.clone()
+        targets_safe[valid_mask] = torch.clamp(targets[valid_mask], min=0.0, max=75.0)
 
-        # Separate zero and positive observations
-        is_zero = (targets_clipped == 0.0) & valid_mask
-        is_positive = (targets_clipped > 0.0) & valid_mask
+        # Separate zero and positive observations (only among valid pixels)
+        is_zero = (targets_safe == 0.0) & valid_mask
+        is_positive = (targets_safe > 0.0) & valid_mask
 
         # Initialize NLL tensor
-        nll = torch.zeros_like(targets_clipped)
+        nll = torch.zeros_like(targets_safe)
 
         # ==========================================
         # Case 1: Observed zero precipitation
@@ -404,7 +407,7 @@ class GammaNLLLoss(nn.Module):
         # Case 2: Observed positive precipitation
         # ==========================================
         if is_positive.any():
-            y = targets_clipped[is_positive]
+            y = targets_safe[is_positive]
             p0 = fraction_zero[is_positive]
             alpha = shape[is_positive]
             theta = scale[is_positive]
@@ -421,13 +424,30 @@ class GammaNLLLoss(nn.Module):
             # Add epsilon to y to avoid log(0) for very small precipitation
             y_safe = torch.clamp(y, min=self.epsilon)
 
-            # Compute Gamma NLL using lgamma (has gradients!)
+            # Compute Gamma NLL components with safeguards
             lgamma_alpha = torch.lgamma(alpha)
+
+            # Ensure no NaN/Inf in lgamma
+            lgamma_alpha = torch.clamp(lgamma_alpha, min=-100, max=100)
+
             log_y = torch.log(y_safe)
             log_theta = torch.log(theta)
 
+            # Compute y/theta term with clamping to prevent overflow
+            y_over_theta = y / theta
+            y_over_theta = torch.clamp(y_over_theta, max=1000.0)  # Cap to prevent explosion
+
             # NLL_gamma = lgamma(α) - (α-1)×log(y) + (α-1)×log(θ) + y/θ + log(θ)
-            nll_gamma = lgamma_alpha - (alpha - 1.0) * log_y + (alpha - 1.0) * log_theta + y / theta + log_theta
+            term1 = lgamma_alpha
+            term2 = -(alpha - 1.0) * log_y
+            term3 = (alpha - 1.0) * log_theta
+            term4 = y_over_theta
+            term5 = log_theta
+
+            nll_gamma = term1 + term2 + term3 + term4 + term5
+
+            # Clamp NLL to reasonable range to prevent inf propagation
+            nll_gamma = torch.clamp(nll_gamma, min=0.0, max=100.0)
 
             # Total NLL for positive observations
             nll[is_positive] = nll_mixture + nll_gamma
@@ -438,20 +458,35 @@ class GammaNLLLoss(nn.Module):
 
             # Check for NaN or Inf
             if torch.isnan(loss) or torch.isinf(loss):
-                # Print diagnostics
+                # Print detailed diagnostics
                 print(f"\n*** WARNING: NaN/Inf loss detected ***")
-                print(f"  fraction_zero range: [{fraction_zero[valid_mask].min():.4f}, {fraction_zero[valid_mask].max():.4f}]")
-                print(f"  shape range: [{shape[valid_mask].min():.4f}, {shape[valid_mask].max():.4f}]")
-                print(f"  scale range: [{scale[valid_mask].min():.4f}, {scale[valid_mask].max():.4f}]")
-                print(f"  targets_clipped range: [{targets_clipped[valid_mask].min():.4f}, {targets_clipped[valid_mask].max():.4f}]")
-                print(f"  targets_original range: [{targets[valid_mask].min():.4f}, {targets[valid_mask].max():.4f}]")
-                print(f"  NLL range: [{nll[valid_mask].min():.4f}, {nll[valid_mask].max():.4f}]")
+                print(f"Valid pixels: {valid_mask.sum()} / {valid_mask.numel()}")
+                print(f"Zero precip pixels: {is_zero.sum()}")
+                print(f"Positive precip pixels: {is_positive.sum()}")
 
-                # Count problematic targets
-                bad_targets = (targets < -0.5) | (targets > 75.0)
-                if bad_targets.any():
-                    print(f"  Found {bad_targets.sum()} targets outside [-0.5, 75.0] range!")
-                    print(f"  Bad target values: {targets[bad_targets][:10]}")  # Show first 10
+                if valid_mask.any():
+                    print(f"  fraction_zero range: [{fraction_zero[valid_mask].min():.4f}, {fraction_zero[valid_mask].max():.4f}]")
+                    print(f"  shape range: [{shape[valid_mask].min():.4f}, {shape[valid_mask].max():.4f}]")
+                    print(f"  scale range: [{scale[valid_mask].min():.4f}, {scale[valid_mask].max():.4f}]")
+                    print(f"  targets_safe range: [{targets_safe[valid_mask].min():.4f}, {targets_safe[valid_mask].max():.4f}]")
+                    print(f"  NLL range: [{nll[valid_mask].min():.4f}, {nll[valid_mask].max():.4f}]")
+
+                    # Show extreme values in positive case
+                    if is_positive.any():
+                        y_pos = targets_safe[is_positive]
+                        alpha_pos = shape[is_positive]
+                        theta_pos = scale[is_positive]
+                        nll_pos = nll[is_positive]
+
+                        # Find the pixel with max NLL
+                        max_nll_idx = torch.argmax(nll_pos)
+                        print(f"\n  Pixel with max NLL:")
+                        print(f"    y={y_pos[max_nll_idx]:.4f}, alpha={alpha_pos[max_nll_idx]:.4f}, theta={theta_pos[max_nll_idx]:.4f}")
+                        print(f"    NLL={nll_pos[max_nll_idx]:.4f}")
+
+                # Count ignore pixels (should be -1)
+                ignore_count = (targets < -0.5).sum()
+                print(f"  Ignore pixels (-1): {ignore_count}")
 
                 # Return a large but finite loss to allow training to continue
                 return torch.tensor(10.0, device=logits.device, requires_grad=True)
