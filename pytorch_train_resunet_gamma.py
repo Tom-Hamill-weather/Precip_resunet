@@ -157,6 +157,7 @@ PATCH_SIZE = 96
 BASE_LEARNING_RATE = 9.e-4
 NUM_EPOCHS = 25
 EARLY_STOPPING_PATIENCE = 3
+GRADIENT_CLIP_VALUE = 1.0  # Clip gradients to prevent instability
 
 # --- 4. Loss Weighting (Initially disabled for unweighted NLL) ---
 
@@ -344,10 +345,13 @@ class GammaNLLLoss(nn.Module):
     epsilon : float
         Small constant added to avoid log(0) when y is very small
     """
-    def __init__(self, shape_min=0.3, scale_min=0.01, ignore_index=-1, epsilon=1e-6):
+    def __init__(self, shape_min=0.3, scale_min=0.01, shape_max=50.0, scale_max=50.0,
+                 ignore_index=-1, epsilon=1e-5):
         super(GammaNLLLoss, self).__init__()
         self.shape_min = shape_min
         self.scale_min = scale_min
+        self.shape_max = shape_max  # Prevent lgamma overflow
+        self.scale_max = scale_max  # Prevent numerical instability
         self.ignore_index = ignore_index
         self.epsilon = epsilon  # For numerical stability in log(y)
 
@@ -368,6 +372,10 @@ class GammaNLLLoss(nn.Module):
         fraction_zero = torch.sigmoid(logits[:, 0, :, :])  # [0, 1]
         shape = self.shape_min + F.softplus(logits[:, 1, :, :])  # [shape_min, ∞)
         scale = self.scale_min + F.softplus(logits[:, 2, :, :])  # [scale_min, ∞)
+
+        # Clamp shape and scale to prevent numerical overflow
+        shape = torch.clamp(shape, min=self.shape_min, max=self.shape_max)
+        scale = torch.clamp(scale, min=self.scale_min, max=self.scale_max)
 
         # Create mask for valid pixels (not bad quality)
         valid_mask = (targets != self.ignore_index)
@@ -422,7 +430,22 @@ class GammaNLLLoss(nn.Module):
 
         # Return mean NLL over valid pixels
         if valid_mask.sum() > 0:
-            return nll[valid_mask].mean()
+            loss = nll[valid_mask].mean()
+
+            # Check for NaN or Inf
+            if torch.isnan(loss) or torch.isinf(loss):
+                # Print diagnostics
+                print(f"\n*** WARNING: NaN/Inf loss detected ***")
+                print(f"  fraction_zero range: [{fraction_zero[valid_mask].min():.4f}, {fraction_zero[valid_mask].max():.4f}]")
+                print(f"  shape range: [{shape[valid_mask].min():.4f}, {shape[valid_mask].max():.4f}]")
+                print(f"  scale range: [{scale[valid_mask].min():.4f}, {scale[valid_mask].max():.4f}]")
+                print(f"  targets range: [{targets[valid_mask].min():.4f}, {targets[valid_mask].max():.4f}]")
+                print(f"  NLL range: [{nll[valid_mask].min():.4f}, {nll[valid_mask].max():.4f}]")
+
+                # Return a large but finite loss to allow training to continue
+                return torch.tensor(10.0, device=logits.device, requires_grad=True)
+
+            return loss
         else:
             return torch.tensor(0.0, device=logits.device)
 
@@ -1022,7 +1045,10 @@ def train_model(date_str, lead_time_str):
     criterion = GammaNLLLoss(
         shape_min=climatology['shape_min'],
         scale_min=climatology['scale_min'],
-        ignore_index=-1
+        shape_max=50.0,  # Prevent lgamma overflow
+        scale_max=50.0,  # Prevent numerical instability
+        ignore_index=-1,
+        epsilon=1e-5  # Conservative epsilon for log stability
     ).to(DEVICE)
 
     # Optimizer and scheduler
@@ -1091,9 +1117,16 @@ def train_model(date_str, lead_time_str):
 
                 if (i + 1) % ACCUMULATION_STEPS == 0:
                     if USE_AMP:
+                        # Unscale gradients before clipping
+                        scaler.unscale_(optimizer)
+                        # Clip gradients
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), GRADIENT_CLIP_VALUE)
+                        # Step optimizer
                         scaler.step(optimizer)
                         scaler.update()
                     else:
+                        # Clip gradients
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), GRADIENT_CLIP_VALUE)
                         optimizer.step()
                     optimizer.zero_grad()
 
@@ -1123,9 +1156,12 @@ def train_model(date_str, lead_time_str):
         # Handle remaining gradients
         if (i + 1) % ACCUMULATION_STEPS != 0:
             if USE_AMP:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), GRADIENT_CLIP_VALUE)
                 scaler.step(optimizer)
                 scaler.update()
             else:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), GRADIENT_CLIP_VALUE)
                 optimizer.step()
             optimizer.zero_grad()
 
