@@ -145,7 +145,7 @@ if DEVICE.type == 'cpu':
     USE_AMP = False
 else:
     BATCH_SIZE = 16
-    NUM_WORKERS = 2
+    NUM_WORKERS = 0  # Reduced from 2 to save memory (workers duplicate data)
     USE_AMP = (DEVICE.type == 'cuda')
 
 # Gradient accumulation to simulate larger effective batch size
@@ -446,7 +446,7 @@ class GRAF_Dataset(Dataset):
             with open(pickle_file, 'rb') as f:
                 print("  Loading GRAF...")
                 self.graf = cPickle.load(f)
-                print(f"    Shape: {self.graf.shape}, Size: {self.graf.nbytes / 1024**2:.1f} MB")
+                print(f"    Shape: {self.graf.shape}, Dtype: {self.graf.dtype}, Size: {self.graf.nbytes / 1024**2:.1f} MB")
 
                 print("  Loading MRMS...")
                 self.mrms = cPickle.load(f)
@@ -531,14 +531,37 @@ class GRAF_Dataset(Dataset):
         else:
             self.stats = normalization_stats
 
-        # Normalize all features
+        # Normalize all features (in-place to save memory)
+        print("\nNormalizing features...")
+        print("  Normalizing GRAF...")
         self.graf = self.normalize(self.graf, 0)
+        gc.collect()
+
+        print("  Normalizing terrain diff...")
         self.diff = self.normalize(self.diff, 1)
+        gc.collect()
+
+        print("  Normalizing GFS RH...")
         self.gfs_r = self.normalize(self.gfs_r, 2)
+        gc.collect()
+
+        print("  Normalizing GRAF × terrain...")
         self.terdiff_graf = self.normalize(self.terdiff_graf, 3)
+        gc.collect()
+
+        print("  Normalizing GRAF × RH...")
         self.graf_rh_interaction = self.normalize(self.graf_rh_interaction, 4)
+        gc.collect()
+
+        print("  Normalizing dlon...")
         self.dlon = self.normalize(self.dlon, 5)
+        gc.collect()
+
+        print("  Normalizing dlat...")
         self.dlat = self.normalize(self.dlat, 6)
+        gc.collect()
+
+        print_memory_usage("After normalizing all features")
 
     def normalize(self, data, idx):
         vmin = self.stats['min'][idx]
