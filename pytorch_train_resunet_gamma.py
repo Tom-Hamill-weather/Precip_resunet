@@ -478,19 +478,26 @@ class GRAF_Dataset(Dataset):
                 self.valid_times = cPickle.load(f)
 
                 print("  Loading GFS PWAT (not used)...")
-                self.gfs_pwat = cPickle.load(f)
-                print(f"    Shape: {self.gfs_pwat.shape}, Size: {self.gfs_pwat.nbytes / 1024**2:.1f} MB")
+                gfs_pwat = cPickle.load(f)
+                print(f"    Shape: {gfs_pwat.shape}, Size: {gfs_pwat.nbytes / 1024**2:.1f} MB")
+                print("    Deleting GFS PWAT to save memory...")
+                del gfs_pwat
 
                 print("  Loading GFS RH...")
                 self.gfs_r = cPickle.load(f)
                 print(f"    Shape: {self.gfs_r.shape}, Size: {self.gfs_r.nbytes / 1024**2:.1f} MB")
 
                 print("  Loading GFS CAPE (not used)...")
-                self.gfs_cape = cPickle.load(f)
-                print(f"    Shape: {self.gfs_cape.shape}, Size: {self.gfs_cape.nbytes / 1024**2:.1f} MB")
+                gfs_cape = cPickle.load(f)
+                print(f"    Shape: {gfs_cape.shape}, Size: {gfs_cape.nbytes / 1024**2:.1f} MB")
+                print("    Deleting GFS CAPE to save memory...")
+                del gfs_cape
 
             print(f"\nTotal samples loaded: {len(self.graf)}")
-            print_memory_usage("After loading pickle")
+
+            # Force garbage collection to free memory
+            gc.collect()
+            print_memory_usage("After loading pickle (with cleanup)")
 
         except Exception as e:
             print(f"CRITICAL ERROR loading pickle: {e}")
