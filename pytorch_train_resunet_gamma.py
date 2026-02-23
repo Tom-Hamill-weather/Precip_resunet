@@ -378,14 +378,18 @@ class GammaNLLLoss(nn.Module):
         scale = torch.clamp(scale, min=self.scale_min, max=self.scale_max)
 
         # Create mask for valid pixels (not bad quality)
-        valid_mask = (targets != self.ignore_index)
+        # Allow some tolerance for floating point comparison
+        valid_mask = (targets >= 0.0) & (targets <= 75.0)
+
+        # Clip targets to valid range as a safety measure
+        targets_clipped = torch.clamp(targets, min=0.0, max=75.0)
 
         # Separate zero and positive observations
-        is_zero = (targets == 0.0) & valid_mask
-        is_positive = (targets > 0.0) & valid_mask
+        is_zero = (targets_clipped == 0.0) & valid_mask
+        is_positive = (targets_clipped > 0.0) & valid_mask
 
         # Initialize NLL tensor
-        nll = torch.zeros_like(targets)
+        nll = torch.zeros_like(targets_clipped)
 
         # ==========================================
         # Case 1: Observed zero precipitation
@@ -400,7 +404,7 @@ class GammaNLLLoss(nn.Module):
         # Case 2: Observed positive precipitation
         # ==========================================
         if is_positive.any():
-            y = targets[is_positive]
+            y = targets_clipped[is_positive]
             p0 = fraction_zero[is_positive]
             alpha = shape[is_positive]
             theta = scale[is_positive]
@@ -439,8 +443,15 @@ class GammaNLLLoss(nn.Module):
                 print(f"  fraction_zero range: [{fraction_zero[valid_mask].min():.4f}, {fraction_zero[valid_mask].max():.4f}]")
                 print(f"  shape range: [{shape[valid_mask].min():.4f}, {shape[valid_mask].max():.4f}]")
                 print(f"  scale range: [{scale[valid_mask].min():.4f}, {scale[valid_mask].max():.4f}]")
-                print(f"  targets range: [{targets[valid_mask].min():.4f}, {targets[valid_mask].max():.4f}]")
+                print(f"  targets_clipped range: [{targets_clipped[valid_mask].min():.4f}, {targets_clipped[valid_mask].max():.4f}]")
+                print(f"  targets_original range: [{targets[valid_mask].min():.4f}, {targets[valid_mask].max():.4f}]")
                 print(f"  NLL range: [{nll[valid_mask].min():.4f}, {nll[valid_mask].max():.4f}]")
+
+                # Count problematic targets
+                bad_targets = (targets < -0.5) | (targets > 75.0)
+                if bad_targets.any():
+                    print(f"  Found {bad_targets.sum()} targets outside [-0.5, 75.0] range!")
+                    print(f"  Bad target values: {targets[bad_targets][:10]}")  # Show first 10
 
                 # Return a large but finite loss to allow training to continue
                 return torch.tensor(10.0, device=logits.device, requires_grad=True)
@@ -474,6 +485,12 @@ class GRAF_Dataset(Dataset):
                 print("  Loading MRMS...")
                 self.mrms = cPickle.load(f)
                 print(f"    Shape: {self.mrms.shape}, Size: {self.mrms.nbytes / 1024**2:.1f} MB")
+                print(f"    MRMS range before clipping: [{self.mrms.min():.2f}, {self.mrms.max():.2f}]")
+
+                # Clip MRMS to reasonable range (same as GRAF normalization max)
+                print("    Clipping MRMS to [0, 75] mm...")
+                self.mrms = np.clip(self.mrms, 0.0, 75.0)
+                print(f"    MRMS range after clipping: [{self.mrms.min():.2f}, {self.mrms.max():.2f}]")
 
                 print("  Loading quality mask...")
                 qual = cPickle.load(f)
@@ -482,8 +499,9 @@ class GRAF_Dataset(Dataset):
                 # Apply quality mask to MRMS immediately and delete qual to save memory
                 print("    Applying quality mask to MRMS...")
                 is_bad = (qual <= 0.01)
-                self.mrms[is_bad] = -1  # ignore_index
-                print(f"    Marked {is_bad.sum()} bad pixels as -1")
+                self.mrms[is_bad] = -1.0  # ignore_index (use float to match dtype)
+                print(f"    Marked {is_bad.sum()} bad pixels as -1.0")
+                print(f"    Final MRMS range: [{self.mrms[self.mrms >= 0].min():.2f}, {self.mrms[self.mrms >= 0].max():.2f}] (valid pixels)")
                 print("    Deleting quality mask to save memory...")
                 del qual, is_bad
                 gc.collect()
