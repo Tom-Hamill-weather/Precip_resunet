@@ -116,6 +116,8 @@ import torch.optim as optim
 from torch.amp import autocast
 from torch.cuda.amp import GradScaler
 from torch.utils.data import DataLoader, Dataset
+import psutil
+import gc
 
 # Enable CPU fallback for MPS unsupported operations
 # This allows Gamma sampling/CDF to work, but those specific ops will run on CPU
@@ -430,29 +432,72 @@ class GRAF_Dataset(Dataset):
     """
     def __init__(self, pickle_file, normalization_stats=None, train=False):
         self.train = train
+        print(f"\nLoading pickle file: {pickle_file}")
+        print_memory_usage("Before loading pickle")
+
         try:
             with open(pickle_file, 'rb') as f:
+                print("  Loading GRAF...")
                 self.graf = cPickle.load(f)
+                print(f"    Shape: {self.graf.shape}, Size: {self.graf.nbytes / 1024**2:.1f} MB")
+
+                print("  Loading MRMS...")
                 self.mrms = cPickle.load(f)
+                print(f"    Shape: {self.mrms.shape}, Size: {self.mrms.nbytes / 1024**2:.1f} MB")
+
+                print("  Loading quality mask...")
                 self.qual = cPickle.load(f)
+                print(f"    Shape: {self.qual.shape}, Size: {self.qual.nbytes / 1024**2:.1f} MB")
+
+                print("  Loading terrain × GRAF...")
                 self.terdiff_graf = cPickle.load(f)
+                print(f"    Shape: {self.terdiff_graf.shape}, Size: {self.terdiff_graf.nbytes / 1024**2:.1f} MB")
+
+                print("  Loading terrain diff...")
                 self.diff = cPickle.load(f)
+                print(f"    Shape: {self.diff.shape}, Size: {self.diff.nbytes / 1024**2:.1f} MB")
+
+                print("  Loading dlon...")
                 self.dlon = cPickle.load(f)
+                print(f"    Shape: {self.dlon.shape}, Size: {self.dlon.nbytes / 1024**2:.1f} MB")
+
+                print("  Loading dlat...")
                 self.dlat = cPickle.load(f)
+                print(f"    Shape: {self.dlat.shape}, Size: {self.dlat.nbytes / 1024**2:.1f} MB")
+
+                print("  Loading init_times...")
                 self.init_times = cPickle.load(f)
+                print("  Loading valid_times...")
                 self.valid_times = cPickle.load(f)
-                self.gfs_pwat = cPickle.load(f)  # Not used
+
+                print("  Loading GFS PWAT (not used)...")
+                self.gfs_pwat = cPickle.load(f)
+                print(f"    Shape: {self.gfs_pwat.shape}, Size: {self.gfs_pwat.nbytes / 1024**2:.1f} MB")
+
+                print("  Loading GFS RH...")
                 self.gfs_r = cPickle.load(f)
-                self.gfs_cape = cPickle.load(f)  # Not used
+                print(f"    Shape: {self.gfs_r.shape}, Size: {self.gfs_r.nbytes / 1024**2:.1f} MB")
+
+                print("  Loading GFS CAPE (not used)...")
+                self.gfs_cape = cPickle.load(f)
+                print(f"    Shape: {self.gfs_cape.shape}, Size: {self.gfs_cape.nbytes / 1024**2:.1f} MB")
+
+            print(f"\nTotal samples loaded: {len(self.graf)}")
+            print_memory_usage("After loading pickle")
+
         except Exception as e:
             print(f"CRITICAL ERROR loading pickle: {e}")
+            print_memory_usage("At error")
             sys.exit(1)
 
         if self.graf.shape[1] != PATCH_SIZE or self.graf.shape[2] != PATCH_SIZE:
              print(f"WARNING: Data shape {self.graf.shape} does not match PATCH_SIZE {PATCH_SIZE}")
 
         # Compute GRAF × RH interaction from raw values before normalization
+        print("\nComputing GRAF × RH interaction...")
         self.graf_rh_interaction = self.graf * self.gfs_r
+        print(f"  Shape: {self.graf_rh_interaction.shape}, Size: {self.graf_rh_interaction.nbytes / 1024**2:.1f} MB")
+        print_memory_usage("After computing interactions")
 
         # Feature list: GRAF, diff, RH, GRAF×diff, GRAF×RH, dlon, dlat
         feature_list = [self.graf, self.diff, self.gfs_r, self.terdiff_graf,
@@ -524,6 +569,31 @@ class GRAF_Dataset(Dataset):
 # ====================================================================
 # --- HELPER FUNCTIONS ---
 # ====================================================================
+
+def print_memory_usage(label=""):
+    """Print current memory usage for CPU and GPU."""
+    process = psutil.Process(os.getpid())
+    mem_info = process.memory_info()
+    rss_gb = mem_info.rss / 1024**3  # RSS in GB
+
+    vm = psutil.virtual_memory()
+    total_gb = vm.total / 1024**3
+    available_gb = vm.available / 1024**3
+    used_pct = vm.percent
+
+    print(f"\n{'='*70}")
+    print(f"MEMORY USAGE: {label}")
+    print(f"{'='*70}")
+    print(f"Process RSS: {rss_gb:.2f} GB")
+    print(f"System: {used_pct:.1f}% used | Available: {available_gb:.1f}/{total_gb:.1f} GB")
+
+    if torch.cuda.is_available():
+        for i in range(torch.cuda.device_count()):
+            allocated = torch.cuda.memory_allocated(i) / 1024**3
+            reserved = torch.cuda.memory_reserved(i) / 1024**3
+            total = torch.cuda.get_device_properties(i).total_memory / 1024**3
+            print(f"GPU {i}: {allocated:.2f} GB allocated | {reserved:.2f} GB reserved | {total:.2f} GB total")
+    print(f"{'='*70}\n")
 
 def compute_gamma_climatology(train_dataset):
     """
@@ -867,12 +937,27 @@ def train_model(date_str, lead_time_str):
     print(f"Device: {DEVICE} | Batch Size: {BATCH_SIZE} | AMP: {USE_AMP}")
     print("="*70 + "\n")
 
+    print_memory_usage("At start of training")
+
     # Load data
     train_pickle = f"{DATA_DIR}/GRAF_Unet_data_train_{date_str}_{lead_time_str}h.cPick"
     val_pickle = f"{DATA_DIR}/GRAF_Unet_data_test_{date_str}_{lead_time_str}h.cPick"
 
-    print(f"Loading training data from: {train_pickle}")
-    print(f"Loading validation data from: {val_pickle}")
+    # Check if files exist
+    if not os.path.exists(train_pickle):
+        print(f"ERROR: Training pickle not found: {train_pickle}")
+        sys.exit(1)
+    if not os.path.exists(val_pickle):
+        print(f"ERROR: Validation pickle not found: {val_pickle}")
+        sys.exit(1)
+
+    # Check file sizes
+    train_size_gb = os.path.getsize(train_pickle) / 1024**3
+    val_size_gb = os.path.getsize(val_pickle) / 1024**3
+    print(f"\nPickle file sizes:")
+    print(f"  Training: {train_size_gb:.2f} GB")
+    print(f"  Validation: {val_size_gb:.2f} GB")
+    print(f"  Total: {train_size_gb + val_size_gb:.2f} GB")
 
     train_dataset = GRAF_Dataset(train_pickle, train=True)
     val_dataset = GRAF_Dataset(val_pickle, normalization_stats=train_dataset.stats, train=False)
@@ -884,16 +969,36 @@ def train_model(date_str, lead_time_str):
     print(f"  Output: 3 parameters (fraction_zero, shape, scale)")
 
     # Compute climatology for initialization
+    print("\n" + "="*70)
+    print("COMPUTING CLIMATOLOGY")
+    print("="*70)
     climatology = compute_gamma_climatology(train_dataset)
+    print_memory_usage("After computing climatology")
 
     # Create dataloaders
+    print("\nCreating data loaders...")
+    print(f"  Batch size: {BATCH_SIZE}")
+    print(f"  Num workers: {NUM_WORKERS}")
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE,
                               shuffle=True, num_workers=NUM_WORKERS)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE,
                            shuffle=False, num_workers=NUM_WORKERS)
+    print_memory_usage("After creating dataloaders")
 
     # Create model with 3 outputs
-    model = AttnResUNet(in_channels=7, num_outputs=3).to(DEVICE)
+    print("\nCreating model...")
+    model = AttnResUNet(in_channels=7, num_outputs=3)
+
+    # Count parameters
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"  Total parameters: {total_params:,}")
+    print(f"  Trainable parameters: {trainable_params:,}")
+    print(f"  Model size: {total_params * 4 / 1024**2:.1f} MB (fp32)")
+
+    print(f"\nMoving model to device: {DEVICE}")
+    model = model.to(DEVICE)
+    print_memory_usage("After creating model")
 
     # Initialize output layer with climatology
     initialize_output_layer(model, climatology)
@@ -947,6 +1052,7 @@ def train_model(date_str, lead_time_str):
     print(f"Training batches per epoch: {len(train_loader)}")
     print(f"Validation batches per epoch: {len(val_loader)}")
     print(f"Diagnostic output frequency: once per epoch\n")
+    print_memory_usage("Before training loop")
 
     # Training loop
     for epoch in range(start_epoch, NUM_EPOCHS):
@@ -955,33 +1061,65 @@ def train_model(date_str, lead_time_str):
         running_loss = 0.0
         optimizer.zero_grad()
 
+        print(f"\n{'='*70}")
+        print(f"Starting Epoch {epoch+1}/{NUM_EPOCHS}")
+        print(f"{'='*70}")
+        print_memory_usage(f"Start of epoch {epoch+1}")
+
         for i, (inputs, targets) in enumerate(train_loader):
-            inputs, targets = inputs.to(DEVICE), targets.to(DEVICE)
-            amp_device = 'cuda' if USE_AMP else 'cpu'
+            try:
+                inputs, targets = inputs.to(DEVICE), targets.to(DEVICE)
+                amp_device = 'cuda' if USE_AMP else 'cpu'
 
-            with torch.amp.autocast(amp_device, enabled=USE_AMP):
-                outputs = model(inputs)
-                loss = criterion(outputs, targets)
-                loss = loss / ACCUMULATION_STEPS
+                with torch.amp.autocast(amp_device, enabled=USE_AMP):
+                    outputs = model(inputs)
+                    loss = criterion(outputs, targets)
+                    loss = loss / ACCUMULATION_STEPS
 
-            if USE_AMP:
-                scaler.scale(loss).backward()
-            else:
-                loss.backward()
-
-            if (i + 1) % ACCUMULATION_STEPS == 0:
                 if USE_AMP:
-                    scaler.step(optimizer)
-                    scaler.update()
+                    scaler.scale(loss).backward()
                 else:
-                    optimizer.step()
-                optimizer.zero_grad()
+                    loss.backward()
 
-            running_loss += loss.item() * ACCUMULATION_STEPS
+                if (i + 1) % ACCUMULATION_STEPS == 0:
+                    if USE_AMP:
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
+                        optimizer.step()
+                    optimizer.zero_grad()
 
-            # Clear GPU cache periodically
-            if i % 100 == 0 and DEVICE.type == 'cuda':
-                torch.cuda.empty_cache()
+                running_loss += loss.item() * ACCUMULATION_STEPS
+
+                # Print progress every 10 batches
+                if i % 10 == 0:
+                    progress = (i + 1) / len(train_loader) * 100
+                    print(f"  Batch {i+1}/{len(train_loader)} ({progress:.1f}%) | Loss: {loss.item() * ACCUMULATION_STEPS:.4f}")
+
+                # Print detailed diagnostics and clear cache every 50 batches
+                if i % 50 == 0 and i > 0:
+                    print_memory_usage(f"Epoch {epoch+1}, Batch {i}")
+
+                # Clear GPU cache periodically
+                if i % 100 == 0 and DEVICE.type == 'cuda':
+                    torch.cuda.empty_cache()
+
+            except RuntimeError as e:
+                if 'out of memory' in str(e):
+                    print(f"\n{'='*70}")
+                    print("CUDA OUT OF MEMORY ERROR")
+                    print(f"{'='*70}")
+                    print(f"Error occurred at Epoch {epoch+1}, Batch {i+1}")
+                    print(f"Batch shape: inputs={inputs.shape if 'inputs' in locals() else 'N/A'}")
+                    print(f"Error message: {e}")
+                    print_memory_usage("At OOM error")
+                    if DEVICE.type == 'cuda':
+                        torch.cuda.empty_cache()
+                        print("\nCleared CUDA cache")
+                        print_memory_usage("After clearing cache")
+                    raise
+                else:
+                    raise
 
         # Handle remaining gradients
         if (i + 1) % ACCUMULATION_STEPS != 0:
