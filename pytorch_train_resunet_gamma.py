@@ -168,11 +168,13 @@ WEIGHT_BY_OBSERVATION = False  # If True, multiply NLL by f(observed_value)
 if os.path.exists('/data/resnet_data'):
     # AWS G5 instance
     DATA_DIR = '/data/resnet_data'
-    TRAIN_DIR = '/data/resnet_data/trainings'
+    PATCH_DATA_DIR = '/data/resnet_data/patch_data'  # Input patch pickle files
+    TRAIN_DIR = '/data/resnet_data/trainings'        # Output model weights
 else:
     # Laptop
     DATA_DIR = '../resnet_data'
-    TRAIN_DIR = '../resnet_data/trainings'
+    PATCH_DATA_DIR = '../resnet_data'  # Input patch pickle files
+    TRAIN_DIR = '../resnet_data/trainings'  # Output model weights
 
 # ====================================================================
 # --- MODEL ARCHITECTURE ---
@@ -1009,9 +1011,9 @@ def train_model(date_str, lead_time_str):
     print(f"Device: {DEVICE} | Batch Size: {BATCH_SIZE} | AMP: {USE_AMP}")
     print("="*70 + "\n")
 
-    # Load data (pickle files are in trainings subdirectory)
-    train_pickle = f"{TRAIN_DIR}/GRAF_Unet_data_train_{date_str}_{lead_time_str}h.cPick"
-    val_pickle = f"{TRAIN_DIR}/GRAF_Unet_data_test_{date_str}_{lead_time_str}h.cPick"
+    # Load data (pickle files are in patch_data subdirectory)
+    train_pickle = f"{PATCH_DATA_DIR}/GRAF_Unet_data_train_{date_str}_{lead_time_str}h.cPick"
+    val_pickle = f"{PATCH_DATA_DIR}/GRAF_Unet_data_test_{date_str}_{lead_time_str}h.cPick"
 
     # Check if files exist
     if not os.path.exists(train_pickle):
