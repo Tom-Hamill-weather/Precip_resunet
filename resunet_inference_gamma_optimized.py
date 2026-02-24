@@ -650,11 +650,11 @@ def calc_gamma_probabilities_optimized(model, Xpredict_tensor, manhattan_tensor,
         # rate = 1 / scale
         rate = 1.0 / theta_safe
 
-        # Create Gamma distribution
-        gamma_dist = Gamma(concentration=alpha_safe, rate=rate)
+        # Create Gamma distribution (disable validation to avoid strict checks)
+        gamma_dist = Gamma(concentration=alpha_safe, rate=rate, validate_args=False)
 
         # Compute CDF at threshold
-        cdf_at_threshold = gamma_dist.cdf(torch.tensor(threshold, device=DEVICE))
+        cdf_at_threshold = gamma_dist.cdf(torch.tensor(threshold, device=DEVICE, dtype=torch.float32))
 
         # P(X > threshold | X > 0) = 1 - CDF
         # P(X > threshold) = (1 - p0) * (1 - CDF)
