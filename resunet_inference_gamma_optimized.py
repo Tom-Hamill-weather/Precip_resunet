@@ -73,8 +73,8 @@ np.set_printoptions(precision=3, suppress=True)
 
 if torch.cuda.is_available():
     DEVICE = torch.device("cuda")
-    USE_AMP = True  # Enable mixed precision on CUDA
-    print(f"Running on: {DEVICE} (with AMP)")
+    USE_AMP = False  # Disable AMP for numerical stability with Gamma distributions
+    print(f"Running on: {DEVICE}")
 elif torch.backends.mps.is_available():
     DEVICE = torch.device("mps")
     USE_AMP = False  # MPS doesn't support AMP well
@@ -566,7 +566,7 @@ def calc_gamma_probabilities_optimized(model, Xpredict_tensor, manhattan_tensor,
             # Stack into single batch tensor: (batch_size, nchannels, N, N)
             batch_tensor = torch.cat(batch_patches, dim=0)
 
-            # Run inference on entire batch with mixed precision
+            # Run inference on entire batch
             with torch.no_grad():
                 if USE_AMP:
                     with torch.cuda.amp.autocast():
@@ -574,10 +574,23 @@ def calc_gamma_probabilities_optimized(model, Xpredict_tensor, manhattan_tensor,
                 else:
                     logits = model(batch_tensor)
 
-                # Transform to parameters
+                # Ensure float32 precision for stability
+                logits = logits.float()
+
+                # Transform to parameters with numerical stability
+                # Clamp logits to prevent overflow in sigmoid/softplus
+                logits = torch.clamp(logits, min=-10, max=10)
+
                 p0 = torch.sigmoid(logits[:, 0, :, :])
                 alpha = shape_min + F.softplus(logits[:, 1, :, :])
                 theta = scale_min + F.softplus(logits[:, 2, :, :])
+
+                # Check for NaNs
+                if torch.isnan(p0).any() or torch.isnan(alpha).any() or torch.isnan(theta).any():
+                    print(f"  WARNING: NaN detected in batch {batch_start//batch_size}")
+                    p0 = torch.nan_to_num(p0, nan=0.5)
+                    alpha = torch.nan_to_num(alpha, nan=1.0)
+                    theta = torch.nan_to_num(theta, nan=1.0)
 
             # Distribute results back to accumulation arrays
             for idx, (j, i, jmin, jmax, imin, imax, h_curr, w_curr, pad_h, pad_w) in enumerate(batch_metadata):
@@ -610,15 +623,29 @@ def calc_gamma_probabilities_optimized(model, Xpredict_tensor, manhattan_tensor,
     process_patches_batched(jcenter2, icenter2, 'Pass 2')
 
     # Normalize weighted averages (on GPU)
+    # Add epsilon to prevent division by zero
+    sumweights_safe = torch.clamp(sumweights_all, min=1e-9)
     valid_mask = sumweights_all > 1e-9
 
     fraction_zero = torch.zeros((ny, nx), dtype=torch.float32, device=DEVICE)
     shape_params = torch.zeros((ny, nx), dtype=torch.float32, device=DEVICE)
     scale_params = torch.zeros((ny, nx), dtype=torch.float32, device=DEVICE)
 
-    fraction_zero = torch.where(valid_mask, fraction_zero_accum / sumweights_all, torch.ones_like(fraction_zero))
-    shape_params = torch.where(valid_mask, shape_accum / sumweights_all, torch.ones_like(shape_params))
-    scale_params = torch.where(valid_mask, scale_accum / sumweights_all, torch.ones_like(scale_params))
+    # Safe division
+    fraction_zero = torch.where(valid_mask, fraction_zero_accum / sumweights_safe, torch.ones_like(fraction_zero))
+    shape_params = torch.where(valid_mask, shape_accum / sumweights_safe, torch.ones_like(shape_params))
+    scale_params = torch.where(valid_mask, scale_accum / sumweights_safe, torch.ones_like(scale_params))
+
+    # Check for NaNs after normalization
+    if torch.isnan(fraction_zero).any():
+        print("  WARNING: NaN in fraction_zero after normalization")
+        fraction_zero = torch.nan_to_num(fraction_zero, nan=0.5)
+    if torch.isnan(shape_params).any():
+        print("  WARNING: NaN in shape_params after normalization")
+        shape_params = torch.nan_to_num(shape_params, nan=1.0)
+    if torch.isnan(scale_params).any():
+        print("  WARNING: NaN in scale_params after normalization")
+        scale_params = torch.nan_to_num(scale_params, nan=1.0)
 
     # Compute probabilities from Gamma mixture using PyTorch (GPU-accelerated!)
     # P(X > threshold) = (1 - p0) * P(Gamma > threshold)
@@ -643,8 +670,14 @@ def calc_gamma_probabilities_optimized(model, Xpredict_tensor, manhattan_tensor,
 
     for key, threshold in thresholds.items():
         # Ensure positive parameters (add small epsilon for numerical stability)
-        alpha_safe = torch.clamp(shape_params, min=1e-6)
-        theta_safe = torch.clamp(scale_params, min=1e-6)
+        alpha_safe = torch.clamp(shape_params, min=0.1)  # Higher minimum for stability
+        theta_safe = torch.clamp(scale_params, min=0.01)
+
+        # Check for NaNs before Gamma distribution
+        if torch.isnan(alpha_safe).any() or torch.isnan(theta_safe).any():
+            print(f"  WARNING: NaN in parameters before Gamma for threshold {key}")
+            alpha_safe = torch.nan_to_num(alpha_safe, nan=1.0)
+            theta_safe = torch.nan_to_num(theta_safe, nan=1.0)
 
         # PyTorch Gamma distribution uses rate parameterization
         # rate = 1 / scale
@@ -656,9 +689,21 @@ def calc_gamma_probabilities_optimized(model, Xpredict_tensor, manhattan_tensor,
         # Compute CDF at threshold
         cdf_at_threshold = gamma_dist.cdf(torch.tensor(threshold, device=DEVICE, dtype=torch.float32))
 
+        # Check for NaN in CDF
+        if torch.isnan(cdf_at_threshold).any():
+            print(f"  WARNING: NaN in CDF for threshold {key}")
+            cdf_at_threshold = torch.nan_to_num(cdf_at_threshold, nan=0.0)
+
+        # Clamp CDF to [0, 1]
+        cdf_at_threshold = torch.clamp(cdf_at_threshold, min=0.0, max=1.0)
+
         # P(X > threshold | X > 0) = 1 - CDF
         # P(X > threshold) = (1 - p0) * (1 - CDF)
         prob_exceed = (1.0 - fraction_zero) * (1.0 - cdf_at_threshold)
+
+        # Final NaN check
+        prob_exceed = torch.nan_to_num(prob_exceed, nan=0.0)
+        prob_exceed = torch.clamp(prob_exceed, min=0.0, max=1.0)
 
         # Store result (keep on GPU for now)
         gamma_probs[key] = prob_exceed
