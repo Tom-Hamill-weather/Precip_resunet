@@ -108,19 +108,25 @@ def read_config_file(config_file, directory_object_name):
     config_object.read(config_file)
     directory = config_object[directory_object_name]
 
-    # Try laptop keys first, then AWS keys
+    # Check if this is laptop config or AWS config
     if "GRAFdatadir_conus_laptop" in directory:
-        GRAFdatadir_conus = directory["GRAFdatadir_conus_laptop"]
+        # Laptop config - use same path for both old and new
+        GRAFdatadir_conus_new = directory["GRAFdatadir_conus_laptop"]
+        GRAFdatadir_conus_old = directory["GRAFdatadir_conus_laptop"]
         GRAFprobsdir_conus = directory["GRAFprobsdir_conus_laptop"]
     else:
-        # AWS config uses different keys
-        GRAFdatadir_conus = directory.get("GRAFdatadir_conus_new",
-                                          directory.get("GRAFdatadir_conus_old"))
+        # AWS/Cray config - has separate paths for old/new GRAF naming
+        GRAFdatadir_conus_new = directory.get("GRAFdatadir_conus_new")
+        GRAFdatadir_conus_old = directory.get("GRAFdatadir_conus_old", GRAFdatadir_conus_new)
         # For AWS, construct probs directory from resnet_data_directory
-        base_dir = directory.get("resnet_data_directory", AWS_BASE_PATH or "/data2/resnet_data")
+        base_dir = directory.get("resnet_data_directory", AWS_BASE_PATH or "/data/resnet_data")
         GRAFprobsdir_conus = f"{base_dir}/probs/"
 
-    return GRAFdatadir_conus, GRAFprobsdir_conus
+    print(f"  GRAF new path: {GRAFdatadir_conus_new}")
+    print(f"  GRAF old path: {GRAFdatadir_conus_old}")
+    print(f"  Probs path: {GRAFprobsdir_conus}")
+
+    return GRAFdatadir_conus_new, GRAFdatadir_conus_old, GRAFprobsdir_conus
 
 # ---------------------------------------------------------------
 
@@ -195,7 +201,7 @@ def read_gribdata(gribfilename, endStep):
 
 # ---------------------------------------------------------------
 
-def GRAF_precip_read(clead, cyyyymmddhh, GRAFdatadir_conus_laptop):
+def GRAF_precip_read(clead, cyyyymmddhh, GRAFdatadir_conus_new, GRAFdatadir_conus_old):
     """Read GRAF precipitation forecast."""
     il = int(clead)
     cyyyymmdd = cyyyymmddhh[0:8]
@@ -205,11 +211,12 @@ def GRAF_precip_read(clead, cyyyymmddhh, GRAFdatadir_conus_laptop):
     cyyyymmdd_fcst = cyyyymmddhh_fcst[0:8]
     chh_fcst = cyyyymmddhh_fcst[8:10]
 
-    if int(cyyyymmddhh) > 2024040512:
-        input_directory =  GRAFdatadir_conus_laptop
+    # April 1, 2024 00Z is the dividing line between old and new GRAF naming
+    if int(cyyyymmddhh) >= 2024040100:
+        input_directory = GRAFdatadir_conus_new
         prefix = 'grid.hdo-graf_conus.'
     else:
-        input_directory = GRAFdatadir_conus_laptop
+        input_directory = GRAFdatadir_conus_old
         prefix = 'grid.hdo-graflr_conus.'
 
     input_directory = input_directory + cyyyymmdd + '/' + chh + '/'
@@ -691,7 +698,7 @@ if __name__ == '__main__':
         config_file_name = 'config_laptop.ini'
 
     print(f"Using config file: {config_file_name}")
-    GRAFdatadir_conus_laptop, GRAFprobsdir_conus_laptop = \
+    GRAFdatadir_conus_new, GRAFdatadir_conus_old, GRAFprobsdir_conus_laptop = \
         read_config_file(config_file_name, 'DIRECTORIES')
     manhattan = define_manhattan(N)
 
@@ -699,7 +706,7 @@ if __name__ == '__main__':
 
     istat_GRAF, precipitation_GRAF, lats, lons, ny, nx, latmin, latmax, \
         lonmin, lonmax, verif_local_time, lon_0, lat_0, lat_1, lat_2 = \
-        GRAF_precip_read(clead, cyyyymmddhh, GRAFdatadir_conus_laptop)
+        GRAF_precip_read(clead, cyyyymmddhh, GRAFdatadir_conus_new, GRAFdatadir_conus_old)
 
     # --- read GFS data (needs GRAF lats/lons for interpolation)
 
