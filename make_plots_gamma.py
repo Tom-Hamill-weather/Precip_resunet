@@ -21,7 +21,21 @@ from dateutils import dateshift
 warnings.filterwarnings("ignore")
 np.set_printoptions(precision=3, suppress=True)
 
-TRAIN_DIR = '../resnet_data/trainings'
+# --- Auto-detect environment (AWS vs local) ---
+def detect_environment():
+    """Detect if running on AWS or local laptop."""
+    # Check for AWS paths (prioritize /data over /data2)
+    aws_paths = ['/data/resnet_data', '/data2/resnet_data']
+    for path in aws_paths:
+        if os.path.exists(path):
+            print(f"Detected AWS environment (found {path})")
+            return 'aws', path
+
+    # Default to laptop
+    print("Detected local laptop environment")
+    return 'laptop', None
+
+ENVIRONMENT, AWS_BASE_PATH = detect_environment()
 
 # --------------------------------------------------------------
 
@@ -31,10 +45,29 @@ def read_config_file(config_file, directory_object_name):
     config_object = ConfigParser()
     config_object.read(config_file)
     directory = config_object[directory_object_name]
-    GRAFdatadir_conus_laptop = directory["GRAFdatadir_conus_laptop"]
-    GRAFprobsdir_conus_laptop = directory["GRAFprobsdir_conus_laptop"]
-    GRAF_plot_dir = directory["GRAF_plot_dir"]
-    return GRAFdatadir_conus_laptop, GRAFprobsdir_conus_laptop, GRAF_plot_dir
+
+    # Check if this is laptop config or AWS config
+    if "GRAFdatadir_conus_laptop" in directory:
+        # Laptop config - use same path for both old and new
+        GRAFdatadir_conus_new = directory["GRAFdatadir_conus_laptop"]
+        GRAFdatadir_conus_old = directory["GRAFdatadir_conus_laptop"]
+        GRAFprobsdir_conus = directory["GRAFprobsdir_conus_laptop"]
+        GRAF_plot_dir = directory.get("GRAF_plot_dir", directory["GRAFprobsdir_conus_laptop"])
+    else:
+        # AWS/Cray config - has separate paths for old/new GRAF naming
+        GRAFdatadir_conus_new = directory.get("GRAFdatadir_conus_new")
+        GRAFdatadir_conus_old = directory.get("GRAFdatadir_conus_old", GRAFdatadir_conus_new)
+        # For AWS, construct probs and plot directories from resnet_data_directory
+        base_dir = directory.get("resnet_data_directory", AWS_BASE_PATH or "/data/resnet_data")
+        GRAFprobsdir_conus = f"{base_dir}/probs/"
+        GRAF_plot_dir = f"{base_dir}/plots/"
+
+    print(f"  GRAF new path: {GRAFdatadir_conus_new}")
+    print(f"  GRAF old path: {GRAFdatadir_conus_old}")
+    print(f"  Probs path: {GRAFprobsdir_conus}")
+    print(f"  Plot directory: {GRAF_plot_dir}")
+
+    return GRAFdatadir_conus_new, GRAFdatadir_conus_old, GRAFprobsdir_conus, GRAF_plot_dir
 
 # ---------------------------------------------------------------
 
@@ -72,7 +105,7 @@ def read_gribdata(gribfilename, endStep):
 
 # ---------------------------------------------------------------
 
-def GRAF_precip_read(clead, cyyyymmddhh, GRAFdatadir_conus_laptop):
+def GRAF_precip_read(clead, cyyyymmddhh, GRAFdatadir_conus_new, GRAFdatadir_conus_old):
     il = int(clead)
     cyyyymmdd = cyyyymmddhh[0:8]
     cyyyymm= cyyyymmddhh[0:6]
@@ -81,11 +114,12 @@ def GRAF_precip_read(clead, cyyyymmddhh, GRAFdatadir_conus_laptop):
     cyyyymmdd_fcst = cyyyymmddhh_fcst[0:8]
     chh_fcst = cyyyymmddhh_fcst[8:10]
 
-    if int(cyyyymmddhh) > 2024040512:
-        input_directory =  GRAFdatadir_conus_laptop 
+    # April 1, 2024 00Z is the dividing line between old and new GRAF naming
+    if int(cyyyymmddhh) >= 2024040100:
+        input_directory = GRAFdatadir_conus_new
         prefix = 'grid.hdo-graf_conus.'
     else:
-        input_directory = GRAFdatadir_conus_laptop 
+        input_directory = GRAFdatadir_conus_old
         prefix = 'grid.hdo-graflr_conus.'
 
     input_directory = input_directory + cyyyymmdd + '/' + chh + '/'
@@ -399,14 +433,27 @@ def plot_GRAF_small(lat_1, lat_2, lat_0, lon_0, lons, lats, \
 cyyyymmddhh = sys.argv[1]
 clead = sys.argv[2]
 
-config_file_name = 'config_laptop.ini'
-GRAFdatadir_conus_laptop, GRAFprobsdir_conus_laptop, \
-    GRAF_plot_dir = read_config_file(config_file_name, \
-    'DIRECTORIES')
+# Select config file based on environment
+if ENVIRONMENT == 'aws':
+    config_file_name = 'config_aws.ini'
+else:
+    config_file_name = 'config_laptop.ini'
+
+print(f"Using config file: {config_file_name}")
+GRAFdatadir_conus_new, GRAFdatadir_conus_old, GRAFprobsdir_conus_laptop, \
+    GRAF_plot_dir = read_config_file(config_file_name, 'DIRECTORIES')
+
+# Ensure plot directory exists
+if not os.path.exists(GRAF_plot_dir):
+    try:
+        os.makedirs(GRAF_plot_dir)
+        print(f"Created plot directory: {GRAF_plot_dir}")
+    except OSError as e:
+        print(f"Warning: Could not create plot directory {GRAF_plot_dir}: {e}")
 
 istat_GRAF, precipitation_GRAF, lats, lons, ny, nx, latmin, latmax, \
     lonmin, lonmax, verif_local_time, lon_0, lat_0, lat_1, lat_2 = \
-    GRAF_precip_read(clead, cyyyymmddhh, GRAFdatadir_conus_laptop)
+    GRAF_precip_read(clead, cyyyymmddhh, GRAFdatadir_conus_new, GRAFdatadir_conus_old)
 
 istat_prob, raw_p0p25mm_prob, gamma_p0p25mm_prob, raw_p1mm_prob, \
     gamma_p1mm_prob, raw_p2p5mm_prob, gamma_p2p5mm_prob, raw_p5mm_prob, \
