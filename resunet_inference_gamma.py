@@ -71,8 +71,33 @@ else:
     DEVICE = torch.device("cpu")
 print(f"Running on: {DEVICE}")
 
-TRAIN_DIR = '../resnet_data/trainings'
-GFS_DATA_DIR = '../resnet_data/gfs'
+# --- Auto-detect environment (AWS vs local) ---
+def detect_environment():
+    """Detect if running on AWS or local laptop."""
+    # Check for AWS paths (prioritize /data over /data2)
+    aws_paths = ['/data/resnet_data', '/data2/resnet_data']
+    for path in aws_paths:
+        if os.path.exists(path):
+            print(f"Detected AWS environment (found {path})")
+            return 'aws', path
+
+    # Default to laptop
+    print("Detected local laptop environment")
+    return 'laptop', None
+
+ENVIRONMENT, AWS_BASE_PATH = detect_environment()
+
+# Set paths based on environment
+if ENVIRONMENT == 'aws':
+    # Use absolute paths from AWS base path
+    TRAIN_DIR = f'{AWS_BASE_PATH}/trainings'
+    GFS_DATA_DIR = f'{AWS_BASE_PATH}/gfs'
+    print(f"Using AWS paths: TRAIN_DIR={TRAIN_DIR}, GFS_DATA_DIR={GFS_DATA_DIR}")
+else:
+    # Use relative paths for laptop
+    TRAIN_DIR = '../resnet_data/trainings'
+    GFS_DATA_DIR = '../resnet_data/gfs'
+    print(f"Using local paths: TRAIN_DIR={TRAIN_DIR}, GFS_DATA_DIR={GFS_DATA_DIR}")
 
 # --------------------------------------------------------------
 
@@ -82,9 +107,20 @@ def read_config_file(config_file, directory_object_name):
     config_object = ConfigParser()
     config_object.read(config_file)
     directory = config_object[directory_object_name]
-    GRAFdatadir_conus_laptop = directory["GRAFdatadir_conus_laptop"]
-    GRAFprobsdir_conus_laptop = directory["GRAFprobsdir_conus_laptop"]
-    return GRAFdatadir_conus_laptop, GRAFprobsdir_conus_laptop
+
+    # Try laptop keys first, then AWS keys
+    if "GRAFdatadir_conus_laptop" in directory:
+        GRAFdatadir_conus = directory["GRAFdatadir_conus_laptop"]
+        GRAFprobsdir_conus = directory["GRAFprobsdir_conus_laptop"]
+    else:
+        # AWS config uses different keys
+        GRAFdatadir_conus = directory.get("GRAFdatadir_conus_new",
+                                          directory.get("GRAFdatadir_conus_old"))
+        # For AWS, construct probs directory from resnet_data_directory
+        base_dir = directory.get("resnet_data_directory", AWS_BASE_PATH or "/data2/resnet_data")
+        GRAFprobsdir_conus = f"{base_dir}/probs/"
+
+    return GRAFdatadir_conus, GRAFprobsdir_conus
 
 # ---------------------------------------------------------------
 
@@ -648,7 +684,13 @@ if __name__ == '__main__':
     ny = 1308; nx = 1524
     nchannels = 7  # 7 channels with interactions
 
-    config_file_name = 'config_laptop.ini'
+    # Select config file based on environment
+    if ENVIRONMENT == 'aws':
+        config_file_name = 'config_aws.ini'
+    else:
+        config_file_name = 'config_laptop.ini'
+
+    print(f"Using config file: {config_file_name}")
     GRAFdatadir_conus_laptop, GRAFprobsdir_conus_laptop = \
         read_config_file(config_file_name, 'DIRECTORIES')
     manhattan = define_manhattan(N)
@@ -672,8 +714,15 @@ if __name__ == '__main__':
 
         # --- Read terrain elevation.
 
+        # Use AWS terrain path if on AWS, otherwise use local
+        if ENVIRONMENT == 'aws':
+            terrain_file = f'{AWS_BASE_PATH}/terrain/GRAF_CONUS_terrain_info.nc'
+        else:
+            terrain_file = 'GRAF_CONUS_terrain_info.nc'
+
+        print(f"Reading terrain from: {terrain_file}")
         terrain, t_diff, dt_dlon, dt_dlat = \
-            read_terrain_characteristics('GRAF_CONUS_terrain_info.nc')
+            read_terrain_characteristics(terrain_file)
 
         # --- Load Gamma model
         model, norm_stats, climatology = read_pytorch(cyyyymmddhh, clead)
