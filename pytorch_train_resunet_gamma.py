@@ -162,6 +162,37 @@ EARLY_STOPPING_PATIENCE = 3
 # Set to 1.0 to disable transformation (use raw precipitation)
 POWER_TRANSFORM = 0.5
 
+# --- 3b. Numerical Stability Parameters (auto-adjusted based on power transform) ---
+def get_stability_params(power_transform):
+    """
+    Return appropriate numerical stability parameters based on power transformation.
+
+    With power transformation (< 1.0), values are compressed to smaller range,
+    requiring more conservative epsilon and bounds.
+
+    Without transformation (1.0), can use less conservative values.
+    """
+    if power_transform < 1.0:
+        # Power transformation: more conservative for numerical stability
+        return {
+            'epsilon': 1e-4,           # Larger epsilon for log protection
+            'shape_max': 100.0,        # Cap shape parameter
+            'scale_max': 100.0,        # Cap scale parameter
+            'nll_max': 100.0,          # Cap NLL loss
+            'grad_clip': 1.0           # Gradient clipping threshold
+        }
+    else:
+        # No transformation: can be less conservative
+        return {
+            'epsilon': 1e-6,           # Smaller epsilon sufficient
+            'shape_max': 200.0,        # Allow larger shape
+            'scale_max': 200.0,        # Allow larger scale
+            'nll_max': 200.0,          # Allow larger NLL
+            'grad_clip': 2.0           # Less aggressive clipping
+        }
+
+STABILITY_PARAMS = get_stability_params(POWER_TRANSFORM)
+
 # --- 4. Loss Weighting (Initially disabled for unweighted NLL) ---
 
 USE_WEIGHTED_LOSS = False
@@ -364,12 +395,16 @@ class GammaNLLLoss(nn.Module):
     epsilon : float
         Small constant added to avoid log(0) when y is very small
     """
-    def __init__(self, shape_min=0.3, scale_min=0.01, ignore_index=-1, epsilon=1e-4):
+    def __init__(self, shape_min=0.3, scale_min=0.01, ignore_index=-1,
+                 epsilon=1e-4, shape_max=100.0, scale_max=100.0, nll_max=100.0):
         super(GammaNLLLoss, self).__init__()
         self.shape_min = shape_min
         self.scale_min = scale_min
+        self.shape_max = shape_max
+        self.scale_max = scale_max
+        self.nll_max = nll_max
         self.ignore_index = ignore_index
-        self.epsilon = epsilon  # For numerical stability (increased from 1e-6)
+        self.epsilon = epsilon
 
     def forward(self, logits, targets):
         """
@@ -390,8 +425,8 @@ class GammaNLLLoss(nn.Module):
         scale = self.scale_min + F.softplus(logits[:, 2, :, :])  # [scale_min, ∞)
 
         # Clamp parameters to prevent numerical issues with lgamma and log
-        shape = torch.clamp(shape, min=self.shape_min, max=100.0)
-        scale = torch.clamp(scale, min=self.scale_min, max=100.0)
+        shape = torch.clamp(shape, min=self.shape_min, max=self.shape_max)
+        scale = torch.clamp(scale, min=self.scale_min, max=self.scale_max)
 
         # Create mask for valid pixels (not bad quality)
         valid_mask = (targets != self.ignore_index)
@@ -442,7 +477,7 @@ class GammaNLLLoss(nn.Module):
             nll_gamma = lgamma_alpha - (alpha - 1.0) * log_y + (alpha - 1.0) * log_theta + y / theta + log_theta
 
             # Clamp to prevent extreme values
-            nll_gamma = torch.clamp(nll_gamma, max=100.0)
+            nll_gamma = torch.clamp(nll_gamma, max=self.nll_max)
 
             # Total NLL for positive observations
             nll[is_positive] = nll_mixture + nll_gamma
@@ -920,6 +955,10 @@ def train_model(date_str, lead_time_str):
     print(f"Training ResUNet GAMMA MODEL for {date_str} at {lead_time_str}h lead")
     print(f"Device: {DEVICE} | Batch Size: {BATCH_SIZE} | AMP: {USE_AMP}")
     print(f"Power Transform: GRAF^{POWER_TRANSFORM}")
+    print(f"Stability params: epsilon={STABILITY_PARAMS['epsilon']:.0e}, "
+          f"grad_clip={STABILITY_PARAMS['grad_clip']}, "
+          f"shape_max={STABILITY_PARAMS['shape_max']}, "
+          f"nll_max={STABILITY_PARAMS['nll_max']}")
     print("="*70 + "\n")
 
     # Load data
@@ -953,11 +992,15 @@ def train_model(date_str, lead_time_str):
     # Initialize output layer with climatology
     initialize_output_layer(model, climatology)
 
-    # Create loss function with climatological bounds
+    # Create loss function with climatological bounds and stability parameters
     criterion = GammaNLLLoss(
         shape_min=climatology['shape_min'],
         scale_min=climatology['scale_min'],
-        ignore_index=-1
+        ignore_index=-1,
+        epsilon=STABILITY_PARAMS['epsilon'],
+        shape_max=STABILITY_PARAMS['shape_max'],
+        scale_max=STABILITY_PARAMS['scale_max'],
+        nll_max=STABILITY_PARAMS['nll_max']
     ).to(DEVICE)
 
     # Optimizer and scheduler
@@ -1026,7 +1069,8 @@ def train_model(date_str, lead_time_str):
 
             if (i + 1) % ACCUMULATION_STEPS == 0:
                 # Gradient clipping to prevent explosion
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                torch.nn.utils.clip_grad_norm_(model.parameters(),
+                                               max_norm=STABILITY_PARAMS['grad_clip'])
 
                 if USE_AMP:
                     scaler.step(optimizer)
@@ -1044,7 +1088,8 @@ def train_model(date_str, lead_time_str):
         # Handle remaining gradients
         if (i + 1) % ACCUMULATION_STEPS != 0:
             # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(),
+                                           max_norm=STABILITY_PARAMS['grad_clip'])
 
             if USE_AMP:
                 scaler.step(optimizer)
