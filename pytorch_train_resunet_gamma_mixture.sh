@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/bin/bash
 # ./pytorch_train_resunet_gamma_mixture.sh
 # Simple script to train 2-component Gamma mixture model over multiple lead times.
 # The pytorch_train_resunet_gamma_mixture.py is smart enough to
