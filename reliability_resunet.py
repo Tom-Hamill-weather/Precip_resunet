@@ -378,25 +378,27 @@ good_dates = np.zeros((ndates), dtype=int)
 for idate, date in enumerate(cyyyymmddhh_list):
     print ('-------- idate, date = ', idate, date)
     validity_date = dateshift(date, int(clead))
-    
-    # --- Read the raw GRAF forecast in 
-    #     /Users/tom.hamill@weather.com/python/resnet_data/GRAF/YYYYMMDD/HH
-    #     and return the GRAF hourly precipitation forecast amount and
-    #     lat/lon.  Compute an array of cosine of latitude too (call this coslat)
-    
-    istat_GRAF, precipitation_GRAF, lats_GRAF, lons_GRAF, \
-        ny_GRAF, nx_GRAF, latmin, latmax, lonmin, lonmax, \
-        verif_local_time, lon_0, lat_0, lat_1, lat_2 = \
-        GRAF_precip_read(clead, date, GRAFdatadir_conus)
-    coslat = np.cos(lats_GRAF*3.1415926/180.)
-    
-    if istat_GRAF == 0: 
-        coslat_save = np.copy(coslat)
-        lons_save = np.copy(lons_GRAF)
-        lats_save = np.copy(lats_GRAF)
-        
+
+    # --- Read previously generated raw and gamma-derived probabilities
+    #     Get lat/lon from probability files (no need for GRAF files!)
+
+    istat_prob, raw_p0p25mm_prob, gamma_p0p25mm_prob, raw_p1mm_prob, \
+        gamma_p1mm_prob, raw_p2p5mm_prob, gamma_p2p5mm_prob, raw_p5mm_prob, \
+        gamma_p5mm_prob, raw_p10mm_prob, gamma_p10mm_prob, lat, lon = \
+        probability_read(clead, date, GRAFprobsdir_conus)
+
+    # Initialize arrays on first successful probability read
+    if idate == 0 and istat_prob == 0:
+        ny_GRAF, nx_GRAF = lat.shape
+        lats_save = lat
+        lons_save = lon
+        coslat_save = np.cos(lat * 3.1415926 / 180.)
+
     if idate == 0: # declare arrays, set to missing
-    
+        if istat_prob != 0:
+            # Skip initialization if first file missing - will try next date
+            continue
+
         lats_all =  \
             -999.99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
         lons_all =  \
@@ -451,29 +453,23 @@ for idate, date in enumerate(cyyyymmddhh_list):
         BS_gamma = np.zeros((nthresholds), dtype=float)
         nsamps_raw = np.zeros((nthresholds), dtype=float)
         nsamps_gamma = np.zeros((nthresholds), dtype=float)
-    
-    # --- Read previously generated raw and gamma-derived probabilities
-    
-    istat_prob, raw_p0p25mm_prob, gamma_p0p25mm_prob, raw_p1mm_prob, \
-        gamma_p1mm_prob, raw_p2p5mm_prob, gamma_p2p5mm_prob, raw_p5mm_prob, \
-        gamma_p5mm_prob, raw_p10mm_prob, gamma_p10mm_prob, lat, lon = \
-        probability_read(clead, date, GRAFprobsdir_conus)
-        
+
     # ---- Read MRMS hourly accumulated precip and data quality
     #      as surrogate for observed.
-    
+
     istat_MRMS, MRMS_precip, MRMS_quality = \
         read_MRMS(mrms_data_directory, validity_date)
-            
-    # ---- If all files available, overwrite missing -99.99 with 
+
+    # ---- If all files available, overwrite missing -99.99 with
     #      real data.
-    
-    print ('istat_MRMS, istat_GRAF, istat_prob = ', istat_MRMS, istat_GRAF, istat_prob)
-    if istat_MRMS == 0 and istat_GRAF == 0 and istat_prob == 0:
+
+    print ('istat_MRMS, istat_prob = ', istat_MRMS, istat_prob)
+    if istat_MRMS == 0 and istat_prob == 0:
         good_dates[idate] = 1
-        
-        lats_all[idate,:,:] = lats_save[:,:]
-        lons_all[idate,:,:] = lons_save[:,:]
+
+        # Use lat/lon from probability file
+        lats_all[idate,:,:] = lat[:,:]
+        lons_all[idate,:,:] = lon[:,:]
         
         raw_ensemble_p0p25mm_all[idate,:,:] = raw_p0p25mm_prob[:,:]
         raw_ensemble_p1mm_all[idate,:,:] = raw_p1mm_prob[:,:]
@@ -506,12 +502,25 @@ for idate, date in enumerate(cyyyymmddhh_list):
         MRMS_binary_p10mm_all[idate,:,:] = MRMS_binary_p10mm[:,:]
         #MRMS_binary_p25mm_all[idate,:,:] = MRMS_binary_p25mm[:,:]
 
+        # Compute coslat from lat/lon in probability file
+        coslat = np.cos(lat * 3.1415926 / 180.)
         coslat_all[idate,:,:] = coslat[:,:]
         a = np.where(MRMS_quality > 0.5)[0]
 
 # --- Compact, getting rid of dates without all the data.
 
 nbad = len(good_dates) - np.sum(good_dates)
+ngood = np.sum(good_dates)
+
+if ngood == 0:
+    print("\n ERROR: No dates with complete data found!")
+    print(" Check that these paths exist and contain data:")
+    print(f"   Probabilities: {GRAFprobsdir_conus}")
+    print(f"   MRMS: {mrms_data_directory}")
+    sys.exit(1)
+
+print(f"\n Found {ngood} dates with complete data out of {ndates} total dates")
+
 date_indices = range(ndates)
 ones = np.ones((ndates), dtype=int)
 date_indices_to_delete = []
