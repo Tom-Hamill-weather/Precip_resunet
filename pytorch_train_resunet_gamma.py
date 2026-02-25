@@ -144,7 +144,7 @@ if DEVICE.type == 'cpu':
 else:
     BATCH_SIZE = 16
     NUM_WORKERS = 2
-    USE_AMP = (DEVICE.type == 'cuda')
+    USE_AMP = False  # Disabled: causes numerical instability with log/lgamma operations
 
 # Gradient accumulation to simulate larger effective batch size
 ACCUMULATION_STEPS = 8  # Effective batch size = 16 * 8 = 128
@@ -364,12 +364,12 @@ class GammaNLLLoss(nn.Module):
     epsilon : float
         Small constant added to avoid log(0) when y is very small
     """
-    def __init__(self, shape_min=0.3, scale_min=0.01, ignore_index=-1, epsilon=1e-6):
+    def __init__(self, shape_min=0.3, scale_min=0.01, ignore_index=-1, epsilon=1e-4):
         super(GammaNLLLoss, self).__init__()
         self.shape_min = shape_min
         self.scale_min = scale_min
         self.ignore_index = ignore_index
-        self.epsilon = epsilon  # For numerical stability in log(y)
+        self.epsilon = epsilon  # For numerical stability (increased from 1e-6)
 
     def forward(self, logits, targets):
         """
@@ -388,6 +388,10 @@ class GammaNLLLoss(nn.Module):
         fraction_zero = torch.sigmoid(logits[:, 0, :, :])  # [0, 1]
         shape = self.shape_min + F.softplus(logits[:, 1, :, :])  # [shape_min, ∞)
         scale = self.scale_min + F.softplus(logits[:, 2, :, :])  # [scale_min, ∞)
+
+        # Clamp parameters to prevent numerical issues with lgamma and log
+        shape = torch.clamp(shape, min=self.shape_min, max=100.0)
+        scale = torch.clamp(scale, min=self.scale_min, max=100.0)
 
         # Create mask for valid pixels (not bad quality)
         valid_mask = (targets != self.ignore_index)
@@ -436,6 +440,9 @@ class GammaNLLLoss(nn.Module):
 
             # NLL_gamma = lgamma(α) - (α-1)×log(y) + (α-1)×log(θ) + y/θ + log(θ)
             nll_gamma = lgamma_alpha - (alpha - 1.0) * log_y + (alpha - 1.0) * log_theta + y / theta + log_theta
+
+            # Clamp to prevent extreme values
+            nll_gamma = torch.clamp(nll_gamma, max=100.0)
 
             # Total NLL for positive observations
             nll[is_positive] = nll_mixture + nll_gamma
@@ -1018,6 +1025,9 @@ def train_model(date_str, lead_time_str):
                 loss.backward()
 
             if (i + 1) % ACCUMULATION_STEPS == 0:
+                # Gradient clipping to prevent explosion
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
                 if USE_AMP:
                     scaler.step(optimizer)
                     scaler.update()
@@ -1033,6 +1043,9 @@ def train_model(date_str, lead_time_str):
 
         # Handle remaining gradients
         if (i + 1) % ACCUMULATION_STEPS != 0:
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
             if USE_AMP:
                 scaler.step(optimizer)
                 scaler.update()
