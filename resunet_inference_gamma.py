@@ -339,7 +339,7 @@ def read_terrain_characteristics(infile):
 
 def generate_features(nchannels, date, clead, \
         ny, nx, precipitation_GRAF, terrain, t_diff, dt_dlon, \
-        dt_dlat, verif_local_time, gfs_rh, norm_stats=None):
+        dt_dlat, verif_local_time, gfs_rh, norm_stats=None, power_transform=1.0):
     """
     Generate 7-channel feature array for model input.
 
@@ -351,6 +351,8 @@ def generate_features(nchannels, date, clead, \
     4: GRAF × RH
     5: dlon gradient
     6: dlat gradient
+
+    power_transform: Apply power transformation to GRAF precipitation (default 1.0 = no transform)
     """
     def normalize_stats(data, idx):
         if norm_stats is None: return data
@@ -359,6 +361,10 @@ def generate_features(nchannels, date, clead, \
         denom = vmax - vmin
         if denom == 0: denom = 1e-8
         return (data - vmin) / denom
+
+    # Apply power transformation to GRAF precipitation
+    if power_transform != 1.0:
+        precipitation_GRAF = np.power(precipitation_GRAF, power_transform)
 
     Xpredict_all = np.zeros((1,nchannels,ny,nx), dtype=float)
 
@@ -422,6 +428,7 @@ def read_pytorch(cyyyymmddhh, clead):
     model = AttnResUNet(in_channels=7, num_outputs=3)
     normalization_stats = None
     climatology = None
+    power_transform = 1.0  # Default to no transformation
 
     try:
         checkpoint = torch.load(best_file, map_location=DEVICE, weights_only=False)
@@ -429,6 +436,7 @@ def read_pytorch(cyyyymmddhh, clead):
             model.load_state_dict(checkpoint['model_state_dict'])
             normalization_stats = checkpoint.get('normalization_stats', None)
             climatology = checkpoint.get('climatology', None)
+            power_transform = checkpoint.get('power_transform', 1.0)
         else:
             model.load_state_dict(checkpoint)
         model.to(DEVICE)
@@ -438,10 +446,12 @@ def read_pytorch(cyyyymmddhh, clead):
         if climatology:
             print(f'   Climatology loaded: shape_min={climatology["shape_min"]:.4f}, '
                   f'scale_min={climatology["scale_min"]:.4f}')
-        return model, normalization_stats, climatology
+        if power_transform != 1.0:
+            print(f'   Power transformation: GRAF^{power_transform}')
+        return model, normalization_stats, climatology, power_transform
     except Exception as e:
         print(f"   Error loading model: {e}")
-        return None, None, None
+        return None, None, None, 1.0
 
 # -------------------------------------------------------------
 # Modular Function 1: Compute Raw GRAF Probabilities
@@ -732,7 +742,7 @@ if __name__ == '__main__':
             read_terrain_characteristics(terrain_file)
 
         # --- Load Gamma model
-        model, norm_stats, climatology = read_pytorch(cyyyymmddhh, clead)
+        model, norm_stats, climatology, power_transform = read_pytorch(cyyyymmddhh, clead)
 
         if model and climatology:
             # --- Build array of features (7 channels with interactions).
@@ -740,7 +750,7 @@ if __name__ == '__main__':
             Xpredict_all, _ = generate_features(nchannels, cyyyymmddhh, \
                 clead, ny, nx, precipitation_GRAF, terrain, \
                 t_diff, dt_dlon, dt_dlat, verif_local_time, \
-                gfs_rh, norm_stats)
+                gfs_rh, norm_stats, power_transform=power_transform)
 
             # Get shape and scale minimums from climatology
             shape_min = climatology['shape_min']

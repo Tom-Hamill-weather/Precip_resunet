@@ -156,6 +156,12 @@ BASE_LEARNING_RATE = 9.e-4
 NUM_EPOCHS = 25
 EARLY_STOPPING_PATIENCE = 3
 
+# --- 3a. Power Transformation Parameter ---
+# Apply power transformation to GRAF precipitation: precip^POWER_TRANSFORM
+# Default 0.5 = square root transformation for variance stabilization
+# Set to 1.0 to disable transformation (use raw precipitation)
+POWER_TRANSFORM = 0.5
+
 # --- 4. Loss Weighting (Initially disabled for unweighted NLL) ---
 
 USE_WEIGHTED_LOSS = False
@@ -429,8 +435,9 @@ class GRAF_Dataset(Dataset):
     Same as categorical version but returns continuous MRMS values instead
     of class indices for Gamma distribution fitting.
     """
-    def __init__(self, pickle_file, normalization_stats=None, train=False):
+    def __init__(self, pickle_file, normalization_stats=None, train=False, power_transform=1.0):
         self.train = train
+        self.power_transform = power_transform
         try:
             with open(pickle_file, 'rb') as f:
                 self.graf = cPickle.load(f)
@@ -452,7 +459,14 @@ class GRAF_Dataset(Dataset):
         if self.graf.shape[1] != PATCH_SIZE or self.graf.shape[2] != PATCH_SIZE:
              print(f"WARNING: Data shape {self.graf.shape} does not match PATCH_SIZE {PATCH_SIZE}")
 
-        # Compute GRAF × RH interaction from raw values before normalization
+        # Apply power transformation to GRAF precipitation BEFORE computing interactions
+        if self.power_transform != 1.0:
+            print(f"  Applying power transformation: GRAF^{self.power_transform}")
+            self.graf = np.power(self.graf, self.power_transform)
+            # Recompute interaction terms with transformed GRAF
+            self.terdiff_graf = self.graf * self.diff
+
+        # Compute GRAF × RH interaction from raw/transformed values before normalization
         self.graf_rh_interaction = self.graf * self.gfs_r
 
         # Feature list: GRAF, diff, RH, GRAF×diff, GRAF×RH, dlon, dlat
@@ -462,11 +476,20 @@ class GRAF_Dataset(Dataset):
         if normalization_stats is None:
             mins = [float(np.min(arr)) for arr in feature_list]
             maxs = [float(np.max(arr)) for arr in feature_list]
-            maxs[0] = 75.0          # GRAF precip
+            # Adjust max for GRAF based on power transformation
+            if self.power_transform == 1.0:
+                maxs[0] = 75.0          # GRAF precip (raw)
+            else:
+                maxs[0] = np.power(75.0, self.power_transform)  # transformed
             maxs[1] = max(maxs[1], 2500.0)   # terrain diff
             maxs[2] = max(maxs[2], 100.0)    # RH (%)
-            maxs[3] = max(maxs[3], 35000.0)  # GRAF × terrain
-            maxs[4] = max(maxs[4], 7500.0)   # GRAF × RH
+            # Interaction terms also affected by power transformation
+            if self.power_transform == 1.0:
+                maxs[3] = max(maxs[3], 35000.0)  # GRAF × terrain
+                maxs[4] = max(maxs[4], 7500.0)   # GRAF × RH
+            else:
+                maxs[3] = max(maxs[3], np.power(75.0, self.power_transform) * 2500.0)
+                maxs[4] = max(maxs[4], np.power(75.0, self.power_transform) * 100.0)
             maxs[5] = max(maxs[5], 0.02)     # dlon
             maxs[6] = max(maxs[6], 0.02)     # dlat
             self.stats = {'min': mins, 'max': maxs}
@@ -769,10 +792,11 @@ def print_diagnostics(epoch, batch_idx, loss_val, logits, targets,
             5: dlon
             6: dlat
             """
-            p_val = precip_mm
+            # Apply power transformation to synthetic GRAF value
+            p_val = np.power(precip_mm, POWER_TRANSFORM)
             t_val = 0.0  # Flat terrain
 
-            f0 = p_val              # GRAF precip
+            f0 = p_val              # GRAF precip (transformed)
             f1 = t_val              # Terrain diff
             f2 = rh_pct             # RH
             f3 = p_val * t_val      # GRAF × terrain
@@ -866,6 +890,7 @@ def train_model(date_str, lead_time_str):
     print("\n" + "="*70)
     print(f"Training ResUNet GAMMA MODEL for {date_str} at {lead_time_str}h lead")
     print(f"Device: {DEVICE} | Batch Size: {BATCH_SIZE} | AMP: {USE_AMP}")
+    print(f"Power Transform: GRAF^{POWER_TRANSFORM}")
     print("="*70 + "\n")
 
     # Load data
@@ -875,8 +900,8 @@ def train_model(date_str, lead_time_str):
     print(f"Loading training data from: {train_pickle}")
     print(f"Loading validation data from: {val_pickle}")
 
-    train_dataset = GRAF_Dataset(train_pickle, train=True)
-    val_dataset = GRAF_Dataset(val_pickle, normalization_stats=train_dataset.stats, train=False)
+    train_dataset = GRAF_Dataset(train_pickle, train=True, power_transform=POWER_TRANSFORM)
+    val_dataset = GRAF_Dataset(val_pickle, normalization_stats=train_dataset.stats, train=False, power_transform=POWER_TRANSFORM)
 
     print(f"\nDataset sizes:")
     print(f"  Training samples: {len(train_dataset)}")
@@ -1049,6 +1074,7 @@ def train_model(date_str, lead_time_str):
                 'loss': best_val_loss,
                 'normalization_stats': train_dataset.stats,
                 'climatology': climatology,  # Save for inference
+                'power_transform': POWER_TRANSFORM,  # Save for inference
             }
             torch.save(save_dict, checkpoint_path)
             best_checkpoint_path = checkpoint_path
