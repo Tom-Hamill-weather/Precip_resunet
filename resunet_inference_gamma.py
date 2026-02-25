@@ -81,6 +81,14 @@ def detect_environment():
             print(f"Detected AWS environment (found {path})")
             return 'aws', path
 
+    # Also check if trainings subdirectory exists (may not have resnet_data parent)
+    aws_training_paths = ['/data/trainings', '/data2/trainings']
+    for path in aws_training_paths:
+        if os.path.exists(path):
+            parent = os.path.dirname(path)
+            print(f"Detected AWS environment (found {path})")
+            return 'aws', parent
+
     # Default to laptop
     print("Detected local laptop environment")
     return 'laptop', None

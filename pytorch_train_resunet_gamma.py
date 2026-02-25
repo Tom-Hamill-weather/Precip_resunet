@@ -167,8 +167,15 @@ POWER_TRANSFORM = 0.5
 USE_WEIGHTED_LOSS = False
 WEIGHT_BY_OBSERVATION = False  # If True, multiply NLL by f(observed_value)
 
-_trainings_abs = '/data2/resnet_data/trainings'
-TRAIN_DIR = _trainings_abs if os.path.exists(_trainings_abs) else '../resnet_data/trainings'
+# Try AWS paths in order of preference, fall back to laptop path
+_trainings_aws1 = '/data/resnet_data/trainings'
+_trainings_aws2 = '/data2/resnet_data/trainings'
+if os.path.exists(_trainings_aws1):
+    TRAIN_DIR = _trainings_aws1
+elif os.path.exists(_trainings_aws2):
+    TRAIN_DIR = _trainings_aws2
+else:
+    TRAIN_DIR = '../resnet_data/trainings'
 DATA_DIR  = TRAIN_DIR
 
 # ====================================================================
