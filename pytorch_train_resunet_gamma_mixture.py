@@ -705,8 +705,15 @@ def compute_gamma_mixture_climatology(train_dataset):
             'scale_min': 0.01
         }
 
+    # Sub-sample wet pixels for faster EM (max 50,000 pixels)
+    max_wet_pixels = 50000
+    if len(wet_values) > max_wet_pixels:
+        print(f"\n  Sub-sampling {max_wet_pixels} wet pixels from {len(wet_values)} for EM...")
+        subsample_indices = np.random.choice(len(wet_values), size=max_wet_pixels, replace=False)
+        wet_values = wet_values[subsample_indices]
+
     # Fit 2-component Gamma mixture using EM algorithm
-    print(f"\n  Fitting 2-component Gamma mixture to {len(wet_values)} wet pixels...")
+    print(f"  Fitting 2-component Gamma mixture to {len(wet_values)} wet pixels...")
     print(f"  Using EM algorithm (gamma_mixture_em.py)...")
 
     try:
