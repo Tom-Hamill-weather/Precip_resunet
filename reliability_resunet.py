@@ -1,7 +1,7 @@
 """
 python reliability_resunet.py cyyyymmddhh_begin cyyyymmddhh_end clead
 
-e.g., 
+e.g.,
 
 python reliability_resunet.py 2025120100 2025123112 12
 
@@ -9,8 +9,8 @@ python reliability_resunet.py 2025120100 2025123112 12
     cyyyymmddhh_end = sys.argv[2]
     clead = sys.argv[3]
 
-This will compute BS, reliability, freq use for the test of 
-Attention ResUNet.  
+This will compute BS, reliability, freq use for the test of
+Attention ResUNet.
 
 """
 
@@ -27,6 +27,22 @@ import scipy.stats as stats
 from scipy import ndimage
 np.set_printoptions(precision=3, suppress=True)
 
+# --- Auto-detect environment (AWS vs local) ---
+def detect_environment():
+    """Detect if running on AWS or local laptop."""
+    # Check for AWS paths (prioritize /data over /data2)
+    aws_paths = ['/data/resnet_data', '/data2/resnet_data']
+    for path in aws_paths:
+        if os.path.exists(path):
+            print(f"Detected AWS environment (found {path})")
+            return 'aws', path
+
+    # Default to laptop
+    print("Detected local laptop environment")
+    return 'laptop', None
+
+ENVIRONMENT, AWS_BASE_PATH = detect_environment()
+
 # --------------------------------------------------------------
 
 def read_config_file(config_file, directory_object_name):
@@ -36,11 +52,28 @@ def read_config_file(config_file, directory_object_name):
     config_object = ConfigParser()
     config_object.read(config_file)
     directory = config_object[directory_object_name]
-    GRAFdatadir_conus_laptop = directory["GRAFdatadir_conus_laptop"]
-    GRAFprobsdir_conus_laptop = directory["GRAFprobsdir_conus_laptop"]
-    GRAF_plot_dir = directory["GRAF_plot_dir"]
-    mrms_data_directory = os.path.expanduser(directory["mrms_data_directory"])
-    return GRAFdatadir_conus_laptop, GRAFprobsdir_conus_laptop, \
+
+    # Check if this is laptop config or AWS config
+    if "GRAFdatadir_conus" in directory:
+        # Laptop config
+        GRAFdatadir_conus = directory["GRAFdatadir_conus"]
+        GRAFprobsdir_conus = directory["GRAFprobsdir_conus"]
+        GRAF_plot_dir = directory["GRAF_plot_dir"]
+        mrms_data_directory = os.path.expanduser(directory["mrms_data_directory"])
+    else:
+        # AWS config
+        GRAFdatadir_conus = directory.get("GRAFdatadir_conus_new")
+        base_dir = directory.get("resnet_data_directory", AWS_BASE_PATH or "/data/resnet_data")
+        GRAFprobsdir_conus = f"{base_dir}/probs/"
+        GRAF_plot_dir = f"{base_dir}/plots/"
+        mrms_data_directory = f"{base_dir}/MRMS/"
+
+    print(f"  GRAF data path: {GRAFdatadir_conus}")
+    print(f"  Probs path: {GRAFprobsdir_conus}")
+    print(f"  Plot path: {GRAF_plot_dir}")
+    print(f"  MRMS path: {mrms_data_directory}")
+
+    return GRAFdatadir_conus, GRAFprobsdir_conus, \
         GRAF_plot_dir, mrms_data_directory
 
 # ----------------------------------------------------------
@@ -79,7 +112,7 @@ def read_gribdata(gribfilename, endStep):
 
 # ---------------------------------------------------------------
 
-def GRAF_precip_read(clead, cyyyymmddhh, GRAFdatadir_conus_laptop):
+def GRAF_precip_read(clead, cyyyymmddhh, GRAFdatadir_conus):
     il = int(clead)
     cyyyymmdd = cyyyymmddhh[0:8]
     cyyyymm= cyyyymmddhh[0:6]
@@ -88,11 +121,12 @@ def GRAF_precip_read(clead, cyyyymmddhh, GRAFdatadir_conus_laptop):
     cyyyymmdd_fcst = cyyyymmddhh_fcst[0:8]
     chh_fcst = cyyyymmddhh_fcst[8:10]
 
-    if int(cyyyymmddhh) > 2024040512:
-        input_directory =  GRAFdatadir_conus_laptop
+    # April 1, 2024 00Z is the dividing line between old and new GRAF naming
+    if int(cyyyymmddhh) >= 2024040100:
+        input_directory = GRAFdatadir_conus
         prefix = 'grid.hdo-graf_conus.'
     else:
-        input_directory = GRAFdatadir_conus_laptop
+        input_directory = GRAFdatadir_conus
         prefix = 'grid.hdo-graflr_conus.'
 
     input_directory = input_directory + cyyyymmdd + '/' + chh + '/'
@@ -130,10 +164,10 @@ def GRAF_precip_read(clead, cyyyymmddhh, GRAFdatadir_conus_laptop):
 
 # ----------------------------------------------------------
 
-def probability_read(clead, cyyyymmddhh, GRAFprobsdir_conus_laptop):
+def probability_read(clead, cyyyymmddhh, GRAFprobsdir_conus):
 
     # Updated to read Gamma model probability files
-    infile = GRAFprobsdir_conus_laptop + cyyyymmddhh + \
+    infile = GRAFprobsdir_conus + cyyyymmddhh + \
         '_'+ clead + '_probs_gamma.nc'
     fexist = os.path.exists(infile)
     if fexist == True:
@@ -310,8 +344,14 @@ ndates = len(cyyyymmddhh_list)
 
 # --- read paths to data
 
-config_file_name = 'config_laptop.ini'
-GRAFdatadir_conus_laptop, GRAFprobsdir_conus_laptop, \
+# Select config file based on environment
+if ENVIRONMENT == 'aws':
+    config_file_name = 'config_aws.ini'
+else:
+    config_file_name = 'config_laptop.ini'
+
+print(f"Using config file: {config_file_name}")
+GRAFdatadir_conus, GRAFprobsdir_conus, \
     GRAF_plot_dir, mrms_data_directory = \
     read_config_file(config_file_name, 'DIRECTORIES')
 
@@ -347,7 +387,7 @@ for idate, date in enumerate(cyyyymmddhh_list):
     istat_GRAF, precipitation_GRAF, lats_GRAF, lons_GRAF, \
         ny_GRAF, nx_GRAF, latmin, latmax, lonmin, lonmax, \
         verif_local_time, lon_0, lat_0, lat_1, lat_2 = \
-        GRAF_precip_read(clead, date, GRAFdatadir_conus_laptop)
+        GRAF_precip_read(clead, date, GRAFdatadir_conus)
     coslat = np.cos(lats_GRAF*3.1415926/180.)
     
     if istat_GRAF == 0: 
@@ -417,7 +457,7 @@ for idate, date in enumerate(cyyyymmddhh_list):
     istat_prob, raw_p0p25mm_prob, gamma_p0p25mm_prob, raw_p1mm_prob, \
         gamma_p1mm_prob, raw_p2p5mm_prob, gamma_p2p5mm_prob, raw_p5mm_prob, \
         gamma_p5mm_prob, raw_p10mm_prob, gamma_p10mm_prob, lat, lon = \
-        probability_read(clead, date, GRAFprobsdir_conus_laptop)
+        probability_read(clead, date, GRAFprobsdir_conus)
         
     # ---- Read MRMS hourly accumulated precip and data quality
     #      as surrogate for observed.
