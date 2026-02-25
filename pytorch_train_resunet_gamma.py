@@ -167,16 +167,31 @@ POWER_TRANSFORM = 0.5
 USE_WEIGHTED_LOSS = False
 WEIGHT_BY_OBSERVATION = False  # If True, multiply NLL by f(observed_value)
 
-# Try AWS paths in order of preference, fall back to laptop path
-_trainings_aws1 = '/data/resnet_data/trainings'
-_trainings_aws2 = '/data2/resnet_data/trainings'
-if os.path.exists(_trainings_aws1):
-    TRAIN_DIR = _trainings_aws1
-elif os.path.exists(_trainings_aws2):
-    TRAIN_DIR = _trainings_aws2
+# AWS path detection
+# DATA_DIR: Location of training data pickle files
+# TRAIN_DIR: Location to save model checkpoints (.pth files)
+_base_aws1 = '/data/resnet_data'
+_base_aws2 = '/data2/resnet_data'
+_base_laptop = '../resnet_data'
+
+if os.path.exists(_base_aws1):
+    BASE_DIR = _base_aws1
+elif os.path.exists(_base_aws2):
+    BASE_DIR = _base_aws2
 else:
-    TRAIN_DIR = '../resnet_data/trainings'
-DATA_DIR  = TRAIN_DIR
+    BASE_DIR = _base_laptop
+
+# Check for training data in patch_data/ first, fall back to trainings/
+# G5 GPU instance uses patch_data/, CPU instance uses trainings/
+_patch_data = f"{BASE_DIR}/patch_data"
+_trainings = f"{BASE_DIR}/trainings"
+
+if os.path.exists(_patch_data) and len(os.listdir(_patch_data)) > 0:
+    DATA_DIR = _patch_data
+else:
+    DATA_DIR = _trainings
+
+TRAIN_DIR = _trainings  # Model checkpoints always go in trainings/
 
 # ====================================================================
 # --- MODEL ARCHITECTURE ---
