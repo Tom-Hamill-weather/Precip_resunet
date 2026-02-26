@@ -50,10 +50,19 @@ class GRAFDataProcessor:
         """Initialize processor by reading configuration."""
         self.params = {}
         self.dirs = {}
+        self.aws_base_path = self._detect_aws_base()
         self._load_config(config_file)
 
+    def _detect_aws_base(self):
+        """Detect AWS base path (G5 vs CPU instance)."""
+        if os.path.exists('/data/resnet_data'):
+            return '/data/resnet_data'
+        elif os.path.exists('/data2/resnet_data'):
+            return '/data2/resnet_data'
+        return None
+
     def _load_config(self, config_file):
-        """Reads the config.ini file."""
+        """Reads the config.ini file and adapts paths for AWS environment."""
         print(f'INFO: Loading config from {config_file}')
         config = ConfigParser()
         config.read(config_file)
@@ -61,7 +70,14 @@ class GRAFDataProcessor:
         if "DIRECTORIES" not in config or "PARAMETERS" not in config:
             raise ValueError("Config file missing DIRECTORIES or PARAMETERS sections")
 
-        self.dirs = config["DIRECTORIES"]
+        # If on AWS, replace /data/ prefix with detected base path
+        self.dirs = {}
+        for key, value in config["DIRECTORIES"].items():
+            if self.aws_base_path and config_file == 'config_aws.ini':
+                # Replace /data/resnet_data with detected base path
+                value = value.replace('/data/resnet_data', self.aws_base_path)
+            self.dirs[key] = value
+
         self.params = config["PARAMETERS"]
         self.ndays_train = int(self.params.get("ndays_train", 60))
         self.graf_transition_date = self.params.get("GRAF_transition_date", "2024040512")
@@ -149,7 +165,10 @@ class GRAFDataProcessor:
             istat: 0 if successful, -1 if failed
             gfs_data: dict with keys 'pwat', 'r', 'cape', 'lats', 'lons', 'step'
         """
-        gfs_dir = self.dirs.get("gfs_data_directory", "/storage1/home/thamill/resnet/resnet_data/gfs")
+        gfs_dir = self.dirs.get("gfs_data_directory")
+        if not gfs_dir:
+            print('  ERROR: gfs_data_directory not defined in config file')
+            return -1, None
         filename = f'gfs_subset_{cyyyymmddhh}.nc'
         filepath = os.path.join(gfs_dir, filename)
 
@@ -352,11 +371,18 @@ def save_dataset(filename, data_dict):
 
 def detect_config():
     """Select the appropriate config file based on the runtime environment."""
-    if os.path.exists('/data2/resnet_data'):
+    # Check for AWS paths (prioritize /data over /data2 for G5 GPU instance)
+    if os.path.exists('/data/resnet_data'):
+        print('INFO: Detected AWS G5 GPU instance environment')
+        return 'config_aws.ini'
+    elif os.path.exists('/data2/resnet_data'):
+        print('INFO: Detected AWS CPU instance environment')
         return 'config_aws.ini'
     elif os.path.exists('/storage2/library/archive/grid'):
+        print('INFO: Detected Cray HPC environment')
         return 'config_hdo.ini'
     else:
+        print('INFO: Detected local laptop environment')
         return 'config_laptop.ini'
 
 
