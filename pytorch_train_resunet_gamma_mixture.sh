@@ -12,21 +12,21 @@
 #tar xvf g.tar
 #cd ../resnet
 
-python pytorch_train_resunet_gamma_mixture.py 2025030100 3
-python pytorch_train_resunet_gamma_mixture.py 2025030100 6
-python pytorch_train_resunet_gamma_mixture.py 2025030100 9
-python pytorch_train_resunet_gamma_mixture.py 2025030100 12
-python pytorch_train_resunet_gamma_mixture.py 2025030100 15
-python pytorch_train_resunet_gamma_mixture.py 2025030100 18
-python pytorch_train_resunet_gamma_mixture.py 2025030100 21
-python pytorch_train_resunet_gamma_mixture.py 2025030100 24
+python pytorch_train_resunet_gamma_mixture.py 2025060100 3
+python pytorch_train_resunet_gamma_mixture.py 2025060100 6
+python pytorch_train_resunet_gamma_mixture.py 2025060100 9
+python pytorch_train_resunet_gamma_mixture.py 2025060100 12
+python pytorch_train_resunet_gamma_mixture.py 2025060100 15
+python pytorch_train_resunet_gamma_mixture.py 2025060100 18
+python pytorch_train_resunet_gamma_mixture.py 2025060100 21
+python pytorch_train_resunet_gamma_mixture.py 2025060100 24
 
-python pytorch_train_resunet_gamma_mixture.py 2025030100 27
-python pytorch_train_resunet_gamma_mixture.py 2025030100 30
-python pytorch_train_resunet_gamma_mixture.py 2025030100 33
-python pytorch_train_resunet_gamma_mixture.py 2025030100 36
-python pytorch_train_resunet_gamma_mixture.py 2025030100 39
-python pytorch_train_resunet_gamma_mixture.py 2025030100 42
-python pytorch_train_resunet_gamma_mixture.py 2025030100 45
-python pytorch_train_resunet_gamma_mixture.py 2025030100 48
+python pytorch_train_resunet_gamma_mixture.py 2025060100 27
+python pytorch_train_resunet_gamma_mixture.py 2025060100 30
+python pytorch_train_resunet_gamma_mixture.py 2025060100 33
+python pytorch_train_resunet_gamma_mixture.py 2025060100 36
+python pytorch_train_resunet_gamma_mixture.py 2025060100 39
+python pytorch_train_resunet_gamma_mixture.py 2025060100 42
+python pytorch_train_resunet_gamma_mixture.py 2025060100 45
+python pytorch_train_resunet_gamma_mixture.py 2025060100 48
 
