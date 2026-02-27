@@ -2,6 +2,9 @@
 python plot_graf_mrms_samples.py filename sample_index
 
 Intended to plot samples of patches from train, test, validation data.
+
+Now supports both pickle (.cPick) and NetCDF (.nc) formats.
+Works on laptop, AWS CPU instance, and AWS G5 GPU instance.
 """
 import sys
 import os
@@ -57,32 +60,96 @@ def get_terrain_colormap():
     return cmap, norm, levels
 
 # --------------------------------------------------------------------
-# Data Loading
+# Environment Detection and Data Loading
 # --------------------------------------------------------------------
 
-def load_sequential_pickle(filename):
-    """
-    Reads the file created by 'save_patched_GRAF_MRMS_gemini.py'.
-    The format is multiple numpy arrays dumped sequentially.
-    """
-    keys_order = ['GRAF', 'MRMS', 'MRMS_qual', 'terdiff_x_GRAF', 
-        'terrain_diff', 'dt_dlon', 'dt_dlat']
-    
-    data = {}
-    
-    if not os.path.exists(filename):
-        print(f"Error: File {filename} not found.")
-        sys.exit(1)
+def detect_environment():
+    """Detect runtime environment and return base data directory."""
+    # AWS G5 GPU instance
+    if os.path.exists('/data/resnet_data'):
+        base_dir = '/data/resnet_data'
+        subdir = 'patch_data' if os.path.exists(f'{base_dir}/patch_data') else 'trainings'
+        return 'AWS G5 GPU', os.path.join(base_dir, subdir)
 
-    print(f"Reading file: {filename}")
-    
+    # AWS CPU instance
+    elif os.path.exists('/data2/resnet_data'):
+        return 'AWS CPU', '/data2/resnet_data/trainings'
+
+    # Laptop
+    else:
+        return 'Laptop', '../resnet_data/trainings'
+
+def resolve_data_path(filename):
+    """
+    Resolve data file path across different environments.
+
+    If filename is just a basename (no path), prepend the environment-specific
+    base directory. Otherwise use the filename as-is.
+    """
+    # If it's already an absolute path or relative path with directory, use as-is
+    if os.path.dirname(filename):
+        return filename
+
+    # Otherwise, prepend environment-specific base directory
+    env_name, base_dir = detect_environment()
+    full_path = os.path.join(base_dir, filename)
+    print(f"Environment: {env_name}")
+    print(f"Data directory: {base_dir}")
+    return full_path
+
+def load_patch_data(filename):
+    """
+    Load patch data from pickle or NetCDF format.
+
+    Uses data_loader_utils for format-agnostic loading.
+    Works with both old format (7 keys) and new format (12 keys with GFS).
+    """
+    # Resolve path based on environment
+    full_path = resolve_data_path(filename)
+
+    # Check if file exists (try both .cPick and .nc)
+    nc_path = full_path.replace('.cPick', '.nc') if full_path.endswith('.cPick') else full_path + '.nc'
+    pickle_path = full_path.replace('.nc', '.cPick') if full_path.endswith('.nc') else full_path + '.cPick'
+
+    if not os.path.exists(nc_path) and not os.path.exists(pickle_path):
+        # Try without extension
+        if not os.path.exists(full_path):
+            print(f"Error: File not found: {full_path}")
+            print(f"  Tried: {nc_path}")
+            print(f"  Tried: {pickle_path}")
+            sys.exit(1)
+
+    # Use data_loader_utils for format-agnostic loading
+    try:
+        from data_loader_utils import load_training_data
+        print(f"Loading: {full_path}")
+        data = load_training_data(full_path)
+        return data
+    except ImportError:
+        print("Error: data_loader_utils.py not found. Falling back to pickle loading.")
+        # Fallback to old pickle loading
+        return load_sequential_pickle_fallback(full_path)
+
+def load_sequential_pickle_fallback(filename):
+    """
+    Fallback loader for old pickle format (without data_loader_utils).
+    Handles both old format (7 keys) and new format (12 keys).
+    """
+    keys_order = ['GRAF', 'MRMS', 'MRMS_qual', 'terdiff_x_GRAF',
+                  'terrain_diff', 'dt_dlon', 'dt_dlat',
+                  'init_times', 'valid_times',
+                  'GFS_pwat', 'GFS_r', 'GFS_cape']
+
+    data = {}
+
     with open(filename, 'rb') as f:
         try:
             for key in keys_order:
                 data[key] = pickle.load(f)
         except EOFError:
-            print(f"Warning: Reached end of file early. Missing keys after {key}.")
-            
+            # Old format files only have first 7 keys
+            pass
+
     return data
 
 # ---------------------------------------------------------------------------------
@@ -92,45 +159,51 @@ def load_sequential_pickle(filename):
 def main():
     if len(sys.argv) != 3:
         print("Usage: python plot_graf_mrms_samples.py <filename> <sample_index>")
-        print("Example: python plot_graf_mrms_samples.py "
-              "/data2/resnet_data/trainings/GRAF_Unet_data_train_2025120100_12h.cPick 12")
+        print("\nExamples:")
+        print("  # With full path:")
+        print("  python plot_graf_mrms_samples.py /data2/resnet_data/trainings/GRAF_Unet_data_train_2025030100_12h.nc 12")
+        print("\n  # With just basename (auto-detects environment):")
+        print("  python plot_graf_mrms_samples.py GRAF_Unet_data_train_2025030100_12h.nc 12")
+        print("\n  # Works with both .nc and .cPick formats")
         sys.exit(1)
 
     filename = sys.argv[1]
-    
+
     try:
         sample_idx = int(sys.argv[2])
     except ValueError:
         print("Error: sample_index must be an integer.")
         sys.exit(1)
 
-    # 1. Load Data
-    data_store = load_sequential_pickle(filename)
-    
-    # Validate we have the necessary keys (Added MRMS_qual)
+    # 1. Load Data (format-agnostic)
+    data_store = load_patch_data(filename)
+
+    # Validate we have the necessary keys
     required_keys = ['GRAF', 'terrain_diff', 'MRMS', 'MRMS_qual']
     for k in required_keys:
         if k not in data_store:
-            print(f"Error: Key '{k}' missing from pickle file.")
+            print(f"Error: Key '{k}' missing from data file.")
             sys.exit(1)
-            
+
     # 2. Extract specific sample
     total_samples = data_store['GRAF'].shape[0]
-    
+
     if sample_idx >= total_samples:
         print(f"Error: Index {sample_idx} out of bounds. "
               f"File contains {total_samples} samples.")
         sys.exit(1)
 
+    print(f"Plotting sample {sample_idx} of {total_samples}")
+
     # Feature 1: Model Forecast (GRAF)
     precip_fcst = data_store['GRAF'][sample_idx]
-    
+
     # Feature 2: Terrain Deviations (terrain_diff)
     terr_dev = data_store['terrain_diff'][sample_idx]
-    
+
     # Target: Analyzed Precip (MRMS)
     precip_anal = data_store['MRMS'][sample_idx]
-    
+
     # Quality: MRMS Data Quality
     quality_anal = data_store['MRMS_qual'][sample_idx]
 
@@ -189,9 +262,9 @@ def main():
     cb3.set_label('mm')
 
     # 4. Save Output
-    base_name = os.path.basename(filename).replace('.cPick', '')
+    base_name = os.path.basename(filename).replace('.cPick', '').replace('.nc', '')
     output_png = f"plot_{base_name}_sample_{sample_idx}.png"
-    
+
     plt.savefig(output_png, dpi=300, bbox_inches='tight')
     print(f"Successfully saved plot to {output_png}")
     plt.close()
