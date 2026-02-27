@@ -213,6 +213,26 @@ def probability_read(clead, cyyyymmddhh, GRAFprobsdir_conus):
 
 # -------------------------------------------------------------------------
 
+def format_date_range(cyyyymmddhh_begin, cyyyymmddhh_end):
+    """
+    Format date range from YYYYMMDDHH strings to readable format.
+    Example: '2025030100' and '2025033112' -> '1 Mar - 31 Mar 2025'
+    """
+    from datetime import datetime
+
+    # Parse begin date
+    begin_dt = datetime.strptime(cyyyymmddhh_begin[:8], '%Y%m%d')
+    # Parse end date
+    end_dt = datetime.strptime(cyyyymmddhh_end[:8], '%Y%m%d')
+
+    # Format dates
+    begin_str = begin_dt.strftime('%-d %b')  # '1 Mar'
+    end_str = end_dt.strftime('%-d %b %Y')  # '31 Mar 2025'
+
+    return f"{begin_str} - {end_str}"
+
+# -------------------------------------------------------------------------
+
 def read_MRMS(mrms_data_directory, cyyyymmddhh_verif):
 
     infile = mrms_data_directory + cyyyymmddhh_verif[0:6]+ \
@@ -509,6 +529,12 @@ for ithresh, thresh in enumerate(pthresholds):
     fig = plt.figure(figsize=(5.,5.))
     a1 = fig.add_axes([.13,.1,.83,.8])
     a1.set_title(ctitle,fontsize=14)
+
+    # Add date range in upper left corner
+    date_range_str = format_date_range(cyyyymmddhh_begin, cyyyymmddhh_end)
+    a1.text(0.02, 0.98, date_range_str, transform=a1.transAxes,
+            fontsize=10, verticalalignment='top', horizontalalignment='left',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
 
     for imodel in range(2):
         if imodel == 0:
