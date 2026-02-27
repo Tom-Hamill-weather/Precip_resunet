@@ -169,8 +169,10 @@ class GRAFDataProcessor:
         if not gfs_dir:
             print('  ERROR: gfs_data_directory not defined in config file')
             return -1, None
+        # Extract YYYYMM from cyyyymmddhh for subdirectory
+        cyyyymm = cyyyymmddhh[0:6]
         filename = f'gfs_subset_{cyyyymmddhh}.nc'
-        filepath = os.path.join(gfs_dir, filename)
+        filepath = os.path.join(gfs_dir, cyyyymm, filename)
 
         if not os.path.exists(filepath):
             print(f'  WARNING: GFS file not found: {filepath}')
