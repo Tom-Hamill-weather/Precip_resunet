@@ -165,39 +165,40 @@ def GRAF_precip_read(clead, cyyyymmddhh, GRAFdatadir_conus):
 # ----------------------------------------------------------
 
 def probability_read(clead, cyyyymmddhh, GRAFprobsdir_conus):
+    """Read Gamma mixture model probability files and return as dictionary."""
 
-    # Updated to read Gamma mixture model probability files
     infile = GRAFprobsdir_conus + cyyyymmddhh + \
         '_'+ clead + '_probs_gamma_mixture.nc'
     fexist = os.path.exists(infile)
+
     if fexist == True:
         nc = Dataset(infile,'r')
         lat = nc.variables['lat'][:,:]
         lon = nc.variables['lon'][:,:]
-        raw_p0p25mm_prob = nc.variables['raw_p0p25mm_prob'][:,:]
-        gamma_p0p25mm_prob = nc.variables['gamma_p0p25mm_prob'][:,:]
-        raw_p1mm_prob = nc.variables['raw_p1mm_prob'][:,:]
-        gamma_p1mm_prob = nc.variables['gamma_p1mm_prob'][:,:]
-        raw_p2p5mm_prob = nc.variables['raw_p2p5mm_prob'][:,:]
-        gamma_p2p5mm_prob = nc.variables['gamma_p2p5mm_prob'][:,:]
-        raw_p5mm_prob = nc.variables['raw_p5mm_prob'][:,:]
-        gamma_p5mm_prob = nc.variables['gamma_p5mm_prob'][:,:]
-        raw_p10mm_prob = nc.variables['raw_p10mm_prob'][:,:]
-        gamma_p10mm_prob = nc.variables['gamma_p10mm_prob'][:,:]
-        #raw_p25mm_prob = nc.variables['raw_p25mm_prob'][:,:]
-        #gamma_p25mm_prob = nc.variables['gamma_p25mm_prob'][:,:]
-        #print ('max raw Gamma 0p25mm = ', \
-        #    np.max(raw_p0p25mm_prob), np.max(gamma_p0p25mm_prob))
-        #print ('max raw Gamma 1mm = ', \
-        #    np.max(raw_p1mm_prob), np.max(gamma_p1mm_prob))
-        #print ('max raw Gamma 2p5mm = ', \
-        #    np.max(raw_p2p5mm_prob), np.max(gamma_p2p5mm_prob))
-        #print ('max raw Gamma 5mm = ', \
-        #    np.max(raw_p5mm_prob), np.max(gamma_p5mm_prob))
-        #print ('max raw Gamma 10mm = ', \
-        #    np.max(raw_p10mm_prob), np.max(gamma_p10mm_prob))
-        #print ('max raw Gamma 25mm = ', \
-        #    np.max(raw_p25mm_prob), np.max(gamma_p25mm_prob))
+
+        # Store probabilities in nested dictionary for cleaner access
+        probs = {
+            0.25: {
+                'raw': nc.variables['raw_p0p25mm_prob'][:,:],
+                'gamma': nc.variables['gamma_p0p25mm_prob'][:,:]
+            },
+            1.0: {
+                'raw': nc.variables['raw_p1mm_prob'][:,:],
+                'gamma': nc.variables['gamma_p1mm_prob'][:,:]
+            },
+            2.5: {
+                'raw': nc.variables['raw_p2p5mm_prob'][:,:],
+                'gamma': nc.variables['gamma_p2p5mm_prob'][:,:]
+            },
+            5.0: {
+                'raw': nc.variables['raw_p5mm_prob'][:,:],
+                'gamma': nc.variables['gamma_p5mm_prob'][:,:]
+            },
+            10.0: {
+                'raw': nc.variables['raw_p10mm_prob'][:,:],
+                'gamma': nc.variables['gamma_p10mm_prob'][:,:]
+            }
+        }
         nc.close()
         istat_prob = 0
     else:
@@ -206,22 +207,9 @@ def probability_read(clead, cyyyymmddhh, GRAFprobsdir_conus):
         istat_prob = -1
         lat = np.empty((0,0), dtype=float)
         lon = np.empty((0,0), dtype=float)
-        raw_p0p25mm_prob = np.empty((0,0), dtype=float)
-        gamma_p0p25mm_prob = np.empty((0,0), dtype=float)
-        raw_p1mm_prob = np.empty((0,0), dtype=float)
-        gamma_p1mm_prob = np.empty((0,0), dtype=float)
-        raw_p2p5mm_prob = np.empty((0,0), dtype=float)
-        gamma_p2p5mm_prob = np.empty((0,0), dtype=float)
-        raw_p5mm_prob = np.empty((0,0), dtype=float)
-        gamma_p5mm_prob = np.empty((0,0), dtype=float)
-        raw_p10mm_prob = np.empty((0,0), dtype=float)
-        gamma_p10mm_prob = np.empty((0,0), dtype=float)
-        #raw_p25mm_prob = np.empty((0,0), dtype=float)
-        #gamma_p25mm_prob = np.empty((0,0), dtype=float)
+        probs = None
 
-    return istat_prob, raw_p0p25mm_prob, gamma_p0p25mm_prob, raw_p1mm_prob, \
-        gamma_p1mm_prob, raw_p2p5mm_prob, gamma_p2p5mm_prob, raw_p5mm_prob, \
-        gamma_p5mm_prob, raw_p10mm_prob, gamma_p10mm_prob, lat, lon
+    return istat_prob, probs, lat, lon
 
 # -------------------------------------------------------------------------
 
@@ -371,146 +359,60 @@ relia_gamma = -99.99*np.ones((nthresholds, ncats), dtype=np.float64)
 BS_gamma = np.zeros((nthresholds), dtype=float)
 nsamps_gamma = np.zeros((nthresholds), dtype=int)
 
-# --- loop over dates
+# --- loop over dates using dynamic lists (no pre-allocation)
 
-inits = False
-good_dates = np.zeros((ndates), dtype=int)
+# Initialize lists to store only valid data
+raw_probs = {thresh: [] for thresh in pthresholds}
+gamma_probs = {thresh: [] for thresh in pthresholds}
+mrms_precip_list = []
+mrms_quality_list = []
+coslat_list = []
+lats_list = []
+lons_list = []
+
+lats_save = None
+lons_save = None
+coslat_save = None
+
 for idate, date in enumerate(cyyyymmddhh_list):
     print ('-------- idate, date = ', idate, date)
     validity_date = dateshift(date, int(clead))
 
     # --- Read previously generated raw and gamma-derived probabilities
-    #     Get lat/lon from probability files (no need for GRAF files!)
-
-    istat_prob, raw_p0p25mm_prob, gamma_p0p25mm_prob, raw_p1mm_prob, \
-        gamma_p1mm_prob, raw_p2p5mm_prob, gamma_p2p5mm_prob, raw_p5mm_prob, \
-        gamma_p5mm_prob, raw_p10mm_prob, gamma_p10mm_prob, lat, lon = \
+    istat_prob, probs, lat, lon = \
         probability_read(clead, date, GRAFprobsdir_conus)
 
-    # Initialize arrays on first successful probability read
-    if idate == 0 and istat_prob == 0:
-        ny_GRAF, nx_GRAF = lat.shape
+    # Save reference lat/lon from first successful read
+    if lats_save is None and istat_prob == 0:
         lats_save = lat
         lons_save = lon
         coslat_save = np.cos(lat * 3.1415926 / 180.)
 
-    if idate == 0: # declare arrays, set to missing
-        if istat_prob != 0:
-            # Skip initialization if first file missing - will try next date
-            continue
-
-        lats_all =  \
-            -999.99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
-        lons_all =  \
-            -999.99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
-        raw_ensemble_p0p25mm_all = \
-            -99.99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
-        raw_ensemble_p1mm_all = \
-            -99.99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
-        raw_ensemble_p2p5mm_all = \
-            -99.99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
-        raw_ensemble_p5mm_all = \
-            -99.99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
-        raw_ensemble_p10mm_all = \
-            -99.99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
-        raw_ensemble_p25mm_all = \
-            -99.99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
-
-        gamma_p0p25mm_all = \
-            -99.99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
-        gamma_p1mm_all = \
-            -99.99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
-        gamma_p2p5mm_all = \
-            -99.99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
-        gamma_p5mm_all = \
-            -99.99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
-        gamma_p10mm_all = \
-            -99.99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
-        gamma_p25mm_all = \
-            -99.99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
-
-        coslat_all = \
-            -99.99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
-
-        MRMS_precip_all = \
-            -99.99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
-        MRMS_binary_p0p25mm_all = \
-            -99.99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
-        MRMS_binary_p1mm_all = \
-            -99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
-        MRMS_binary_p2p5mm_all = \
-            -99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
-        MRMS_binary_p5mm_all = \
-            -99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
-        MRMS_binary_p10mm_all = \
-            -99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
-        MRMS_binary_p25mm_all = \
-            -99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
-        MRMS_data_quality_all = \
-            -99.99*np.ones((ndates, ny_GRAF, nx_GRAF), dtype=float)
-
-        BS_raw = np.zeros((nthresholds), dtype=float)
-        BS_gamma = np.zeros((nthresholds), dtype=float)
-        nsamps_raw = np.zeros((nthresholds), dtype=float)
-        nsamps_gamma = np.zeros((nthresholds), dtype=float)
-
     # ---- Read MRMS hourly accumulated precip and data quality
-    #      as surrogate for observed.
-
     istat_MRMS, MRMS_precip, MRMS_quality = \
         read_MRMS(mrms_data_directory, validity_date)
 
-    # ---- If all files available, overwrite missing -99.99 with
-    #      real data.
-
+    # ---- If all files available, append to lists
     print ('istat_MRMS, istat_prob = ', istat_MRMS, istat_prob)
     if istat_MRMS == 0 and istat_prob == 0:
-        good_dates[idate] = 1
+        # Append probability data for each threshold
+        for thresh in pthresholds:
+            raw_probs[thresh].append(probs[thresh]['raw'])
+            gamma_probs[thresh].append(probs[thresh]['gamma'])
 
-        # Use lat/lon from probability file
-        lats_all[idate,:,:] = lat[:,:]
-        lons_all[idate,:,:] = lon[:,:]
+        # Append MRMS data
+        mrms_precip_list.append(MRMS_precip)
+        mrms_quality_list.append(MRMS_quality)
 
-        raw_ensemble_p0p25mm_all[idate,:,:] = raw_p0p25mm_prob[:,:]
-        raw_ensemble_p1mm_all[idate,:,:] = raw_p1mm_prob[:,:]
-        raw_ensemble_p2p5mm_all[idate,:,:] = raw_p2p5mm_prob[:,:]
-        raw_ensemble_p5mm_all[idate,:,:] = raw_p5mm_prob[:,:]
-        raw_ensemble_p10mm_all[idate,:,:] = raw_p10mm_prob[:,:]
-        #raw_ensemble_p25mm_all[idate,:,:] = raw_p25mm_prob[:,:]
-
-        gamma_p0p25mm_all[idate,:,:] = gamma_p0p25mm_prob[:,:]
-        gamma_p1mm_all[idate,:,:] = gamma_p1mm_prob[:,:]
-        gamma_p2p5mm_all[idate,:,:] = gamma_p2p5mm_prob[:,:]
-        gamma_p5mm_all[idate,:,:] = gamma_p5mm_prob[:,:]
-        gamma_p10mm_all[idate,:,:] = gamma_p10mm_prob[:,:]
-        #gamma_p25mm_all[idate,:,:] = gamma_p25mm_prob[:,:]
-
-        MRMS_precip_all[idate,:,:] = MRMS_precip[:,:]
-        MRMS_data_quality_all[idate,:,:] = MRMS_quality[:,:]
-
-        MRMS_binary_p0p25mm = np.where(MRMS_precip >= 0.25, 1, 0)
-        MRMS_binary_p1mm = np.where(MRMS_precip >= 1.0, 1, 0)
-        MRMS_binary_p2p5mm = np.where(MRMS_precip >= 2.5, 1, 0)
-        MRMS_binary_p5mm = np.where(MRMS_precip >= 5.0, 1, 0)
-        MRMS_binary_p10mm = np.where(MRMS_precip >= 10.0, 1, 0)
-        #MRMS_binary_p25mm = np.where(MRMS_precip >= 25.0, 1, 0)
-
-        MRMS_binary_p0p25mm_all[idate,:,:] = MRMS_binary_p0p25mm[:,:]
-        MRMS_binary_p1mm_all[idate,:,:] = MRMS_binary_p1mm[:,:]
-        MRMS_binary_p2p5mm_all[idate,:,:] = MRMS_binary_p2p5mm[:,:]
-        MRMS_binary_p5mm_all[idate,:,:] = MRMS_binary_p5mm[:,:]
-        MRMS_binary_p10mm_all[idate,:,:] = MRMS_binary_p10mm[:,:]
-        #MRMS_binary_p25mm_all[idate,:,:] = MRMS_binary_p25mm[:,:]
-
-        # Compute coslat from lat/lon in probability file
+        # Append lat/lon/coslat
+        lats_list.append(lat)
+        lons_list.append(lon)
         coslat = np.cos(lat * 3.1415926 / 180.)
-        coslat_all[idate,:,:] = coslat[:,:]
-        a = np.where(MRMS_quality > 0.5)[0]
+        coslat_list.append(coslat)
 
-# --- Compact, getting rid of dates without all the data.
+# --- Convert lists to arrays (only valid dates included)
 
-nbad = len(good_dates) - np.sum(good_dates)
-ngood = np.sum(good_dates)
+ngood = len(mrms_precip_list)
 
 if ngood == 0:
     print("\n ERROR: No dates with complete data found!")
@@ -521,64 +423,19 @@ if ngood == 0:
 
 print(f"\n Found {ngood} dates with complete data out of {ndates} total dates")
 
-date_indices = range(ndates)
-ones = np.ones((ndates), dtype=int)
-date_indices_to_delete = []
-for idate in range(ndates):
-    if good_dates[idate] == 0: date_indices_to_delete.append(idate)
-nbad = len(date_indices_to_delete)
-if nbad > 0:
+# Convert lists to numpy arrays - much faster than pre-allocating and deleting
+lats_all = np.array(lats_list)
+lons_all = np.array(lons_list)
+coslat_all = np.array(coslat_list)
+MRMS_precip_all = np.array(mrms_precip_list)
+MRMS_data_quality_all = np.array(mrms_quality_list)
 
-    lats_all = np.delete(lats_all, date_indices_to_delete, axis=0)
-    lons_all = np.delete(lons_all, date_indices_to_delete, axis=0)
-    coslat_all = np.delete(coslat_all, date_indices_to_delete, axis=0)
+# Convert probability dictionaries to arrays
+raw_ensemble_probs = {thresh: np.array(raw_probs[thresh]) for thresh in pthresholds}
+gamma_ensemble_probs = {thresh: np.array(gamma_probs[thresh]) for thresh in pthresholds}
 
-    raw_ensemble_p0p25mm_all = np.delete(raw_ensemble_p0p25mm_all, \
-        date_indices_to_delete, axis=0)
-    raw_ensemble_p1mm_all = np.delete(raw_ensemble_p1mm_all, \
-        date_indices_to_delete, axis=0)
-    raw_ensemble_p2p5mm_all = np.delete(raw_ensemble_p2p5mm_all, \
-        date_indices_to_delete, axis=0)
-    raw_ensemble_p5mm_all = np.delete(raw_ensemble_p5mm_all, \
-        date_indices_to_delete, axis=0)
-    raw_ensemble_p10mm_all = np.delete(raw_ensemble_p10mm_all, \
-        date_indices_to_delete, axis=0)
-    #raw_ensemble_p25mm_all = np.delete(raw_ensemble_p25mm_all, \
-    #    date_indices_to_delete, axis=0)
-
-    gamma_p0p25mm_all = np.delete(gamma_p0p25mm_all, \
-        date_indices_to_delete, axis=0)
-    gamma_p1mm_all = np.delete(gamma_p1mm_all, \
-        date_indices_to_delete, axis=0)
-    gamma_p2p5mm_all = np.delete(gamma_p2p5mm_all, \
-        date_indices_to_delete, axis=0)
-    gamma_p5mm_all = np.delete(gamma_p5mm_all, \
-        date_indices_to_delete, axis=0)
-    gamma_p10mm_all = np.delete(gamma_p10mm_all, \
-        date_indices_to_delete, axis=0)
-    #gamma_p25mm_all = np.delete(gamma_p25mm_all, \
-    #    date_indices_to_delete, axis=0)
-
-    MRMS_precip_all = np.delete(MRMS_precip_all, \
-        date_indices_to_delete, axis=0)
-    MRMS_binary_p0p25mm_all = np.delete(MRMS_binary_p0p25mm_all, \
-        date_indices_to_delete, axis=0)
-    MRMS_binary_p1mm_all = np.delete(MRMS_binary_p1mm_all, \
-        date_indices_to_delete, axis=0)
-    MRMS_binary_p2p5mm_all = np.delete(MRMS_binary_p2p5mm_all, \
-        date_indices_to_delete, axis=0)
-    MRMS_binary_p5mm_all = np.delete(MRMS_binary_p5mm_all, \
-        date_indices_to_delete, axis=0)
-    MRMS_binary_p10mm_all = np.delete(MRMS_binary_p10mm_all, \
-        date_indices_to_delete, axis=0)
-    #MRMS_binary_p25mm_all = np.delete(MRMS_binary_p25mm_all, \
-    #    date_indices_to_delete, axis=0)
-    MRMS_data_quality_all = np.delete(MRMS_data_quality_all, \
-        date_indices_to_delete, axis=0)
-    print ('date_indices_to_delete = ',date_indices_to_delete)
-    print (np.shape(coslat_all))
-    ndates, ny, nx = np.shape(MRMS_precip_all)
-    #print ('ndates after elimination of dates with incomplete: ', ndates)
+ndates, ny, nx = np.shape(MRMS_precip_all)
+print(f"Array shape: ({ndates}, {ny}, {nx})")
 
 # ---- Process this threshold
 
@@ -590,21 +447,10 @@ for ithresh, thresh in enumerate(pthresholds):
     MRMS_pre = MRMS_precip_all.flatten()
     MRMS_dq = MRMS_data_quality_all.flatten()
     coslat_flat = coslat_all.flatten()
-    if ithresh == 0:
-        prob_forecast_raw = raw_ensemble_p0p25mm_all.flatten()
-        prob_forecast_gamma = gamma_p0p25mm_all.flatten()
-    elif ithresh == 1:
-        prob_forecast_raw = raw_ensemble_p1mm_all.flatten()
-        prob_forecast_gamma = gamma_p1mm_all.flatten()
-    elif ithresh == 2:
-        prob_forecast_raw = raw_ensemble_p2p5mm_all.flatten()
-        prob_forecast_gamma = gamma_p2p5mm_all.flatten()
-    elif ithresh == 3:
-        prob_forecast_raw = raw_ensemble_p5mm_all.flatten()
-        prob_forecast_gamma = gamma_p5mm_all.flatten()
-    elif ithresh == 4:
-        prob_forecast_raw = raw_ensemble_p10mm_all.flatten()
-        prob_forecast_gamma = gamma_p10mm_all.flatten()
+
+    # Use dictionary lookup instead of if/elif chain
+    prob_forecast_raw = raw_ensemble_probs[thresh].flatten()
+    prob_forecast_gamma = gamma_ensemble_probs[thresh].flatten()
 
     # ---- thin the data to where MRMS observations are
     #      >= 0.0 and data quality >= 0.5.  Obs >= 0 should cover
