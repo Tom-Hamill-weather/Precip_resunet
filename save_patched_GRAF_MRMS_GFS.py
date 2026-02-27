@@ -93,10 +93,10 @@ class GRAFDataProcessor:
         chh_fcst = cyyyymmddhh_fcst[8:10]
 
         if int(cyyyymmddhh) > int(self.graf_transition_date):
-            base_dir = self.dirs["GRAFdatadir_conus_new"]
+            base_dir = self.dirs["grafdatadir_conus_new"]
             prefix = 'grid.hdo-graf_conus.'
         else:
-            base_dir = self.dirs["GRAFdatadir_conus_old"]
+            base_dir = self.dirs["grafdatadir_conus_old"]
             prefix = 'grid.hdo-graflr_conus.'
 
         input_dir = os.path.join(base_dir, cyyyymmdd, chh)
