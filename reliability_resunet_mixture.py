@@ -255,57 +255,48 @@ def read_MRMS(mrms_data_directory, cyyyymmddhh_verif):
 # -------------------------------------------------------------------------
 
 def compute_contab_BS(nstns, prob, obs, ncats, threshold, coslat):
+    """
+    VECTORIZED VERSION: Compute contingency table and Brier Score.
+    Much faster than looping through categories.
+    """
 
-    """ for this case day, compute the contingency table
-        elements that are later used to calculate
-        reliability and frequency of use. """
-
-    # ---- convert observation to binary.  Only use obs
-    #      whose verification time align with the forecast time.
-
-    #print ('np.shape(coslat) = ', np.shape(coslat))
-    ones = np.ones((nstns), dtype=int)
-    zeros = np.zeros((nstns), dtype=int)
     contab = np.zeros((ncats, 2), dtype=float)
     fmean = np.zeros((ncats), dtype=float)
 
-    #print ('nstns, nsamps = ', nstns, nsamps)
-    binary_obs = np.where(obs < threshold, zeros, ones)
+    # Convert observations to binary
+    binary_obs = (obs >= threshold).astype(int)
 
-    # ---- for this category (range of forecast probabilities)
-    #      find all the cases with probabilities in this range,
-    #      and then populate the contingency table based on
-    #      whether the observation was above the threshold or not.
+    # Define probability bin edges
+    # For ncats=11, bins are: [0, 0.05, 0.15, ..., 0.95, 1.0]
+    bin_edges = np.linspace(0, 1, ncats)
+    bin_width = 1.0 / (ncats - 1)
+    bin_edges = bin_edges - bin_width / 2.0
+    bin_edges[0] = 0.0
+    bin_edges[-1] = 1.0
 
+    # Assign each probability to a bin (vectorized!)
+    # Returns indices 0 to ncats-1
+    bins = np.digitize(prob, bin_edges) - 1
+    bins = np.clip(bins, 0, ncats - 1)
+
+    # Compute contingency table using vectorized operations
     for icat in range(ncats):
+        mask = (bins == icat)
+        if np.any(mask):
+            # Compute mean forecast probability for this bin
+            fmean[icat] = np.mean(prob[mask])
 
-        # ---- saved for 11 categories given 31 ens mbrs.
+            # Count events and non-events weighted by coslat
+            event_mask = mask & (binary_obs == 1)
+            non_event_mask = mask & (binary_obs == 0)
 
-        pmin = np.max([0.0, float(icat)/(ncats-1) - 1./(2*(ncats-1))])
-        pmax = np.min([1.0, float(icat)/(ncats-1) + 1./(2*(ncats-1))])
+            contab[icat, 1] = np.sum(coslat[event_mask])
+            contab[icat, 0] = np.sum(coslat[non_event_mask])
 
-        a = np.where(np.logical_and(prob >= pmin, prob < pmax))[0]
-        fmean[icat] = np.mean(prob[a])
-        binary_fcst = np.where(np.logical_and ( \
-            prob >= pmin, prob < pmax), ones, zeros)
-        a = np.where(np.logical_and (binary_fcst == 1, binary_obs == 1))[0]
-        if len(a) > 0:
-            contab[icat,1] = contab[icat,1] + np.sum(coslat[a])
-        a = np.where(np.logical_and (binary_fcst == 1, binary_obs == 0))[0]
-        if len(a) > 0:
-            contab[icat,0] = contab[icat,0] + np.sum(coslat[a])
-
-    # ---- now compute Brier Score.
-
-    nsamps = 0
-    a = np.where(binary_obs == 0)[0]
-    if len(a) > 0:
-        BS = np.sum(coslat[a]*(prob[a])**2)
-        nsamps = nsamps + np.sum(coslat[a])
-    a = np.where(binary_obs == 1)[0]
-    if len(a) > 0:
-        BS = BS + np.sum(coslat[a]*(1.-prob[a])**2)
-        nsamps = nsamps + np.sum(coslat[a])
+    # Compute Brier Score (vectorized)
+    BS_terms = coslat * ((prob - binary_obs) ** 2)
+    BS = np.sum(BS_terms)
+    nsamps = np.sum(coslat)
 
     return contab, BS, nsamps, fmean
 
@@ -462,30 +453,25 @@ print(f"Array shape: ({ndates}, {ny}, {nx})")
 for ithresh, thresh in enumerate(pthresholds):
 
     print ('Processing threshold = ', thresh)
-    lats = lats_all.flatten()
-    lons = lons_all.flatten()
-    MRMS_pre = MRMS_precip_all.flatten()
-    MRMS_dq = MRMS_data_quality_all.flatten()
-    coslat_flat = coslat_all.flatten()
 
-    # Use dictionary lookup instead of if/elif chain
-    prob_forecast_raw = raw_ensemble_probs[thresh].flatten()
-    prob_forecast_gamma = gamma_ensemble_probs[thresh].flatten()
+    # MEMORY OPTIMIZATION: Apply quality filter BEFORE flattening
+    # Create boolean mask on 3D arrays (much more memory efficient)
+    print ('  Creating quality mask...')
+    quality_mask = (MRMS_precip_all >= 0.0) & \
+                   (MRMS_data_quality_all >= 0.5) & \
+                   (MRMS_precip_all < 100.0)
 
-    # ---- thin the data to where MRMS observations are
-    #      >= 0.0 and data quality >= 0.5.  Obs >= 0 should cover
-    #      extant forecasts
+    # Extract only valid points (no need to flatten everything first!)
+    print ('  Extracting valid points...')
+    observations = MRMS_precip_all[quality_mask]
+    prob_forecast_raw = raw_ensemble_probs[thresh][quality_mask]
+    prob_forecast_gamma = gamma_ensemble_probs[thresh][quality_mask]
+    coslat_flat = coslat_all[quality_mask]
 
-    print ('  Thinning to points with data quality > 0.5')
-    a = np.where(np.logical_and(np.logical_and(\
-        MRMS_pre >= 0.0, MRMS_dq >= 0.5), MRMS_pre < 100.))[0]
-    nobs = len(a)
-    lats = lats[a]
-    lons = lons[a]
-    observations = MRMS_pre[a]
-    prob_forecast_raw = prob_forecast_raw[a]
-    prob_forecast_gamma = prob_forecast_gamma[a]
-    coslat_flat = coslat_flat[a]
+    nobs = len(observations)
+    print (f'  Valid observations: {nobs:,} (reduced from {MRMS_precip_all.size:,})')
+
+    # Note: We don't need lats/lons for the contingency table computation
 
     # --- contingency tables for raw
 
