@@ -503,21 +503,24 @@ class GRAF_Dataset(Dataset):
         self.train = train
         self.power_transform = power_transform
         try:
-            with open(pickle_file, 'rb') as f:
-                self.graf = cPickle.load(f)
-                self.mrms = cPickle.load(f)
-                self.qual = cPickle.load(f)
-                self.terdiff_graf = cPickle.load(f)
-                self.diff = cPickle.load(f)
-                self.dlon = cPickle.load(f)
-                self.dlat = cPickle.load(f)
-                self.init_times = cPickle.load(f)
-                self.valid_times = cPickle.load(f)
-                self.gfs_pwat = cPickle.load(f)  # Not used
-                self.gfs_r = cPickle.load(f)
-                self.gfs_cape = cPickle.load(f)  # Not used
+            # Load data using format-agnostic loader (supports .cPick and .nc)
+            from data_loader_utils import load_training_data
+            data = load_training_data(pickle_file)
+
+            self.graf = data['GRAF']
+            self.mrms = data['MRMS']
+            self.qual = data['MRMS_qual']
+            self.terdiff_graf = data['terdiff_x_GRAF']
+            self.diff = data['terrain_diff']
+            self.dlon = data['dt_dlon']
+            self.dlat = data['dt_dlat']
+            self.init_times = data['init_times']
+            self.valid_times = data['valid_times']
+            self.gfs_pwat = data['GFS_pwat']  # Not used
+            self.gfs_r = data['GFS_r']
+            self.gfs_cape = data['GFS_cape']  # Not used
         except Exception as e:
-            print(f"CRITICAL ERROR loading pickle: {e}")
+            print(f"CRITICAL ERROR loading data: {e}")
             sys.exit(1)
 
         if self.graf.shape[1] != PATCH_SIZE or self.graf.shape[2] != PATCH_SIZE:

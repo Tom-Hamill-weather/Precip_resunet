@@ -44,9 +44,9 @@ for pickle_file in "$DIR"/*.cPick; do
         tail -4 /tmp/convert_${base}.log | head -3
         CONVERTED=$((CONVERTED + 1))
 
-        # Optionally delete pickle after successful conversion
-        # Uncomment next line after verifying conversions work:
-        # rm "$pickle_file"
+        # Delete pickle immediately after successful conversion (disk full!)
+        rm "$pickle_file"
+        echo "  ✓ Deleted original pickle file"
     else
         echo "  ERROR: Conversion failed (see /tmp/convert_${base}.log)"
         FAILED=$((FAILED + 1))
