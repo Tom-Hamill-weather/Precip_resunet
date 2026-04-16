@@ -101,7 +101,8 @@ def read_mrms_file(mrms_dir, yyyymmddhh):
     lats and lons are only populated on the first call (caller may pass
     them as None to signal "not yet read").
     """
-    fname = os.path.join(mrms_dir,
+    cyyyymm = yyyymmddhh[0:6]
+    fname = os.path.join(mrms_dir, cyyyymm,
                          f'MRMS_1h_pamt_and_data_qual_{yyyymmddhh}.nc')
     if not os.path.exists(fname):
         print(f'  WARNING: MRMS file not found: {fname}')
