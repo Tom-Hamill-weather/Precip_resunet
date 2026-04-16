@@ -109,8 +109,8 @@ def read_mrms_file(mrms_dir, yyyymmddhh):
         return None
     try:
         with Dataset(fname, 'r') as ds:
-            precip  = ds['precipitation'][:].data.astype(np.float32)
-            quality = ds['data_quality'][:].data.astype(np.float32)
+            precip  = np.ma.filled(ds['precipitation'][:], 0.0).astype(np.float32)
+            quality = np.ma.filled(ds['data_quality'][:],  0.0).astype(np.float32)
             lats    = ds['lats'][:].data.astype(np.float32)
             lons    = ds['lons'][:].data.astype(np.float32)
         return precip, quality, lats, lons
