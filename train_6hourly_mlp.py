@@ -75,7 +75,7 @@ RANDOM_SEED   = 42
 SHAPE_MIN = 0.1
 SCALE_MIN = 0.01
 
-HIDDEN_SIZES = [128, 128, 64]
+HIDDEN_SIZES = [72, 144, 72, 36, 12]
 DROPOUT_P    = 0.1
 
 # Data directory (relative to this script's location)
@@ -98,8 +98,8 @@ class GammaMixtureMLP(nn.Module):
     MLP that maps 36 hourly gamma-mixture features to 6 parameters for
     the 6-hourly zero-inflated two-component Gamma mixture distribution.
 
-    Architecture: 36 → 128 → 128 → 64 → 6
-    Activations:  GELU + Dropout(0.1) after each BatchNorm layer.
+    Architecture: 36 → 72 → 144 → 72 → 36 → 12 → 6
+    Activations:  ReLU + Dropout(0.1) after each BatchNorm layer.
 
     Label-switching fix: shape2 is constrained to exceed shape1 by at
     least 0.5, ensuring component 2 always represents the heavier tail.
@@ -116,7 +116,7 @@ class GammaMixtureMLP(nn.Module):
         for in_sz, out_sz in zip(layer_sizes, layer_sizes[1:]):
             layers += [nn.Linear(in_sz, out_sz),
                        nn.BatchNorm1d(out_sz),
-                       nn.GELU(),
+                       nn.ReLU(),
                        nn.Dropout(p=dropout_p)]
         layers.append(nn.Linear(hidden_sizes[-1], 6))
         self.net = nn.Sequential(*layers)
@@ -128,7 +128,7 @@ class GammaMixtureMLP(nn.Module):
         shape1     = self.shape_min + F.softplus(raw[:, 2])
         scale1     = self.scale_min + F.softplus(raw[:, 3])
         # Label-switching fix: shape2 always > shape1 by at least 0.5
-        shape2     = shape1.detach() + 0.5 + F.softplus(raw[:, 4])
+        shape2     = shape1 + 0.5 + F.softplus(raw[:, 4])
         scale2     = self.scale_min + F.softplus(raw[:, 5])
         return frac_zero, mix_weight, shape1, scale1, shape2, scale2
 
