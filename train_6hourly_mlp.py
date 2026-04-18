@@ -27,7 +27,7 @@ Output parameters (6 per sample):
     fraction_zero, mixture_weight, shape1, scale1, shape2, scale2
 
 Loss function:
-    CRPS via numerical integration (trapezoidal rule) over the
+    NLL for zero-inflated two-component Gamma mixture over the
     zero-inflated two-component Gamma mixture CDF.
 
 Checkpoint saved to:
@@ -77,10 +77,6 @@ SCALE_MIN = 0.01
 
 HIDDEN_SIZES = [72, 144, 72, 36, 12]
 
-# CRPS integration parameters
-N_QUAD = 200
-X_MAX  = 150.0   # mm; captures >99.9 % of 6-hourly precipitation events
-
 # Data directory (relative to this script's location)
 SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR     = os.path.join(SCRIPT_DIR, 'data')
@@ -127,13 +123,23 @@ class GammaMixtureMLP(nn.Module):
 
 
 # =========================================================================
-# CRPS Loss
+# NLL Loss
 # =========================================================================
 
-def crps_loss(frac_zero, mix_weight, shape1, scale1, shape2, scale2, y):
+def nll_loss(frac_zero, mix_weight, shape1, scale1, shape2, scale2, y):
     """
-    CRPS via trapezoidal integration over the zero-inflated two-component
-    Gamma mixture CDF.
+    Negative log-likelihood for a zero-inflated two-component Gamma mixture.
+
+    torch.igamma has no gradient w.r.t. its shape argument, so CRPS is not
+    differentiable.  NLL only requires lgamma / log, which are fully
+    differentiable in PyTorch.
+
+    Case y = 0 :  NLL = -log(frac_zero)
+    Case y > 0 :  NLL = -log(1 - frac_zero)
+                        - log[ w * GammaPDF(y; α1, θ1)
+                               + (1-w) * GammaPDF(y; α2, θ2) ]
+
+    log GammaPDF(y; α, θ) = (α-1)*log(y) - y/θ - α*log(θ) - lgamma(α)
 
     Parameters
     ----------
@@ -142,29 +148,47 @@ def crps_loss(frac_zero, mix_weight, shape1, scale1, shape2, scale2, y):
 
     Returns
     -------
-    scalar mean CRPS
+    scalar mean NLL
     """
-    x = torch.linspace(1e-6, X_MAX, N_QUAD, device=y.device).unsqueeze(0)  # (1, N_QUAD)
+    eps = 1e-7
 
-    # Broadcast all params to (batch, 1) for computation with (1, N_QUAD)
-    fz  = frac_zero.unsqueeze(1)
-    mw  = mix_weight.unsqueeze(1)
-    a1  = shape1.unsqueeze(1)
-    b1  = scale1.unsqueeze(1)
-    a2  = shape2.unsqueeze(1)
-    b2  = scale2.unsqueeze(1)
+    def log_gamma_pdf(y_pos, alpha, theta):
+        return ((alpha - 1.0) * torch.log(y_pos)
+                - y_pos / theta
+                - alpha * torch.log(theta)
+                - torch.lgamma(alpha))
 
-    # Regularised incomplete gamma: torch.igamma(a, x/b) = CDF of Gamma(a,b) at x
-    G1 = torch.igamma(a1, x / b1)               # (batch, N_QUAD)
-    G2 = torch.igamma(a2, x / b2)
-    mix_cdf = mw * G1 + (1.0 - mw) * G2
-    Fx  = fz + (1.0 - fz) * mix_cdf             # zero-inflated CDF
+    zero_mask = (y == 0.0)
+    pos_mask  = ~zero_mask
 
-    indicator = (x >= y.unsqueeze(1)).float()    # (batch, N_QUAD)
-    integrand = (Fx - indicator) ** 2
+    nll = torch.empty_like(y)
 
-    crps = torch.trapezoid(integrand, x[0], dim=1)   # (batch,)
-    return crps.mean()
+    # --- y = 0 ---
+    nll[zero_mask] = -torch.log(frac_zero[zero_mask] + eps)
+
+    # --- y > 0 ---
+    if pos_mask.any():
+        y_p   = y[pos_mask]
+        fz_p  = frac_zero[pos_mask]
+        mw_p  = mix_weight[pos_mask]
+        s1_p  = shape1[pos_mask]
+        sc1_p = scale1[pos_mask]
+        s2_p  = shape2[pos_mask]
+        sc2_p = scale2[pos_mask]
+
+        log_pdf1 = log_gamma_pdf(y_p, s1_p, sc1_p)
+        log_pdf2 = log_gamma_pdf(y_p, s2_p, sc2_p)
+
+        # log-mixture via logsumexp for numerical stability
+        log_mix = torch.logaddexp(
+            torch.log(mw_p + eps)       + log_pdf1,
+            torch.log(1.0 - mw_p + eps) + log_pdf2,
+        )
+
+        nll[pos_mask] = -torch.log(1.0 - fz_p + eps) - log_mix
+
+    nll = torch.clamp(nll, max=100.0)
+    return nll.mean()
 
 
 # =========================================================================
@@ -272,13 +296,13 @@ def checkpoint_path(clead):
 
 
 def save_checkpoint(path, model, optimizer, scheduler, epoch,
-                    best_val_crps, feat_mean, feat_std, clead):
+                    best_val_nll, feat_mean, feat_std, clead):
     torch.save({
         'model_state_dict':     model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'scheduler_state_dict': scheduler.state_dict(),
         'epoch':          epoch,
-        'best_val_crps':  best_val_crps,
+        'best_val_nll':  best_val_nll,
         'feature_mean':   feat_mean,
         'feature_std':    feat_std,
         'shape_min':      model.shape_min,
@@ -293,7 +317,7 @@ def load_checkpoint(path, model, optimizer, scheduler):
     model.load_state_dict(ckpt['model_state_dict'])
     optimizer.load_state_dict(ckpt['optimizer_state_dict'])
     scheduler.load_state_dict(ckpt['scheduler_state_dict'])
-    return ckpt['epoch'], ckpt['best_val_crps'], ckpt['feature_mean'], ckpt['feature_std']
+    return ckpt['epoch'], ckpt['best_val_nll'], ckpt['feature_mean'], ckpt['feature_std']
 
 
 # =========================================================================
@@ -328,10 +352,10 @@ def make_loaders(features, targets, feat_mean, feat_std):
 
 
 def run_epoch(loader, model, optimizer=None):
-    """One forward pass over loader; returns mean CRPS."""
+    """One forward pass over loader; returns mean NLL."""
     training = optimizer is not None
     model.train(training)
-    total_crps = 0.0
+    total_nll = 0.0
     n_batches  = 0
 
     with torch.set_grad_enabled(training):
@@ -340,7 +364,7 @@ def run_epoch(loader, model, optimizer=None):
             y_batch = y_batch.to(DEVICE)
 
             fz, mw, s1, sc1, s2, sc2 = model(X_batch)
-            loss = crps_loss(fz, mw, s1, sc1, s2, sc2, y_batch)
+            loss = nll_loss(fz, mw, s1, sc1, s2, sc2, y_batch)
 
             if training:
                 optimizer.zero_grad()
@@ -348,10 +372,10 @@ def run_epoch(loader, model, optimizer=None):
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
                 optimizer.step()
 
-            total_crps += loss.item()
+            total_nll += loss.item()
             n_batches  += 1
 
-    return total_crps / n_batches
+    return total_nll / n_batches
 
 
 # =========================================================================
@@ -398,7 +422,7 @@ def main():
         optimizer, mode='min', factor=0.5, patience=LR_PATIENCE)
 
     start_epoch    = 0
-    best_val_crps  = float('inf')
+    best_val_nll  = float('inf')
     no_improve     = 0
 
     # ------------------------------------------------------------------
@@ -407,10 +431,10 @@ def main():
     ckpt_path = checkpoint_path(clead)
     if os.path.exists(ckpt_path):
         print(f'Resuming from checkpoint: {ckpt_path}')
-        start_epoch, best_val_crps, feat_mean, feat_std = \
+        start_epoch, best_val_nll, feat_mean, feat_std = \
             load_checkpoint(ckpt_path, model, optimizer, scheduler)
         start_epoch += 1
-        print(f'  Resuming at epoch {start_epoch}, best val CRPS={best_val_crps:.6f}')
+        print(f'  Resuming at epoch {start_epoch}, best val NLL={best_val_nll:.6f}')
     else:
         # Initialise output layer with climatology
         init_output_layer(model, targets[train_idx])
@@ -428,24 +452,24 @@ def main():
     # 6. Training loop
     # ------------------------------------------------------------------
     for epoch in range(start_epoch, MAX_EPOCHS):
-        train_crps = run_epoch(train_loader, model, optimizer)
-        val_crps   = run_epoch(val_loader,   model, optimizer=None)
+        train_nll = run_epoch(train_loader, model, optimizer)
+        val_nll   = run_epoch(val_loader,   model, optimizer=None)
 
-        scheduler.step(val_crps)
+        scheduler.step(val_nll)
         lr_now = optimizer.param_groups[0]['lr']
 
-        improved = val_crps < best_val_crps
+        improved = val_nll < best_val_nll
         tag = ' *' if improved else ''
         print(f'Epoch {epoch+1:3d}/{MAX_EPOCHS}  '
-              f'train CRPS={train_crps:.6f}  '
-              f'val CRPS={val_crps:.6f}  '
+              f'train NLL={train_nll:.6f}  '
+              f'val NLL={val_nll:.6f}  '
               f'lr={lr_now:.2e}{tag}')
 
         if improved:
-            best_val_crps = val_crps
+            best_val_nll = val_nll
             no_improve    = 0
             save_checkpoint(ckpt_path, model, optimizer, scheduler,
-                            epoch, best_val_crps,
+                            epoch, best_val_nll,
                             feat_mean, feat_std, clead)
             print(f'  Checkpoint saved.')
         else:
@@ -454,7 +478,7 @@ def main():
                 print(f'Early stopping: no improvement for {ES_PATIENCE} epochs.')
                 break
 
-    print(f'\nDone. Best val CRPS = {best_val_crps:.6f}')
+    print(f'\nDone. Best val NLL = {best_val_nll:.6f}')
     print(f'Checkpoint: {ckpt_path}')
 
 
