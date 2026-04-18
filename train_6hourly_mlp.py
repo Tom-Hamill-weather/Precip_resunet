@@ -66,7 +66,7 @@ print(f'Using device: {DEVICE}')
 
 BATCH_SIZE    = 1024
 LEARNING_RATE = 1e-3
-MAX_EPOCHS    = 25
+MAX_EPOCHS    = 75
 LR_PATIENCE   = 5          # ReduceLROnPlateau patience
 ES_PATIENCE   = 5          # early-stopping patience
 VAL_FRAC      = 0.20
@@ -75,7 +75,8 @@ RANDOM_SEED   = 42
 SHAPE_MIN = 0.1
 SCALE_MIN = 0.01
 
-HIDDEN_SIZES = [72, 144, 72, 36, 12]
+HIDDEN_SIZES = [128, 128, 64]
+DROPOUT_P    = 0.1
 
 # Data directory (relative to this script's location)
 SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -96,9 +97,15 @@ class GammaMixtureMLP(nn.Module):
     """
     MLP that maps 36 hourly gamma-mixture features to 6 parameters for
     the 6-hourly zero-inflated two-component Gamma mixture distribution.
+
+    Architecture: 36 → 128 → 128 → 64 → 6
+    Activations:  GELU + Dropout(0.1) after each BatchNorm layer.
+
+    Label-switching fix: shape2 is constrained to exceed shape1 by at
+    least 0.5, ensuring component 2 always represents the heavier tail.
     """
 
-    def __init__(self, hidden_sizes=HIDDEN_SIZES,
+    def __init__(self, hidden_sizes=HIDDEN_SIZES, dropout_p=DROPOUT_P,
                  shape_min=SHAPE_MIN, scale_min=SCALE_MIN):
         super().__init__()
         self.shape_min = shape_min
@@ -107,17 +114,21 @@ class GammaMixtureMLP(nn.Module):
         layer_sizes = [36] + hidden_sizes
         layers = []
         for in_sz, out_sz in zip(layer_sizes, layer_sizes[1:]):
-            layers += [nn.Linear(in_sz, out_sz), nn.BatchNorm1d(out_sz), nn.ReLU()]
+            layers += [nn.Linear(in_sz, out_sz),
+                       nn.BatchNorm1d(out_sz),
+                       nn.GELU(),
+                       nn.Dropout(p=dropout_p)]
         layers.append(nn.Linear(hidden_sizes[-1], 6))
         self.net = nn.Sequential(*layers)
 
     def forward(self, x):
-        raw = self.net(x)                                 # (batch, 6)
+        raw = self.net(x)                                      # (batch, 6)
         frac_zero  = torch.sigmoid(raw[:, 0])
         mix_weight = torch.sigmoid(raw[:, 1])
         shape1     = self.shape_min + F.softplus(raw[:, 2])
         scale1     = self.scale_min + F.softplus(raw[:, 3])
-        shape2     = self.shape_min + F.softplus(raw[:, 4])
+        # Label-switching fix: shape2 always > shape1 by at least 0.5
+        shape2     = shape1.detach() + 0.5 + F.softplus(raw[:, 4])
         scale2     = self.scale_min + F.softplus(raw[:, 5])
         return frac_zero, mix_weight, shape1, scale1, shape2, scale2
 
@@ -308,6 +319,7 @@ def save_checkpoint(path, model, optimizer, scheduler, epoch,
         'shape_min':      model.shape_min,
         'scale_min':      model.scale_min,
         'hidden_sizes':   HIDDEN_SIZES,
+        'dropout_p':      DROPOUT_P,
         'clead':          clead,
     }, path)
 
