@@ -127,7 +127,18 @@ class GammaMixtureMLP(nn.Module):
         scale1     = self.scale_min + F.softplus(raw[:, 3])
         shape2     = self.shape_min + F.softplus(raw[:, 4])
         scale2     = self.scale_min + F.softplus(raw[:, 5])
-        return frac_zero, mix_weight, shape1, scale1, shape2, scale2
+
+        # Reorder so component 1 always has the smaller mean (drier).
+        # swap is treated as a constant by autograd — gradients flow through
+        # the parameter values, not through the ordering decision.
+        swap = (shape1 * scale1 > shape2 * scale2).float()    # 1 where order is wrong
+        shape1_out     = (1 - swap) * shape1  + swap * shape2
+        scale1_out     = (1 - swap) * scale1  + swap * scale2
+        shape2_out     = (1 - swap) * shape2  + swap * shape1
+        scale2_out     = (1 - swap) * scale2  + swap * scale1
+        mix_weight_out = (1 - swap) * mix_weight + swap * (1 - mix_weight)
+
+        return frac_zero, mix_weight_out, shape1_out, scale1_out, shape2_out, scale2_out
 
 
 # =========================================================================
