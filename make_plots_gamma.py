@@ -252,23 +252,7 @@ def plot_GRAF(lat_1, lat_2, lat_0, lon_0, lons, lats, \
     cb.ax.tick_params(labelsize=7)
     cb.set_label('Precipitation amount (mm)', fontsize=10)
 
-    # --- panel 2: Gamma Model POP
-    axloc = [0.51,0.58,0.48,0.34]
-    ax1 = fig.add_axes(axloc)
-    title = '(b) Attention ResUNet Gamma '+ltitle
-    ax1.set_title(title, fontsize=12,color='Black')
-    CS2 = m.contourf(x, y, lowprob_gamma, clevs_prob, \
-        cmap=None, colors=colorst, extend='both')
-    m.drawcoastlines(linewidth=0.6,color='Gray')
-    m.drawcountries(linewidth=0.4,color='Gray')
-    m.drawstates(linewidth=0.2,color='Gray')
-    cax = fig.add_axes([0.53,0.55,0.44,0.015])
-    cb = plt.colorbar(CS2, orientation='horizontal', cax=cax,\
-        drawedges=True, ticks=clevs_prob, format='%g')
-    cb.ax.tick_params(labelsize=7)
-    cb.set_label('Probability', fontsize=10)
-
-    # --- panel 3: terrain height
+    # --- panel 2: terrain height
     clevs_terrain = [0, 300, 600, 900, 1200, 1600, 2000, 2500, 3500]
     colorst_terrain = [
         'White',     # under: sea level and below
@@ -282,20 +266,36 @@ def plot_GRAF(lat_1, lat_2, lat_0, lon_0, lons, lats, \
         '#A0A0A0',   # 2500-3500 m (gray)
         '#D8D8D8',   # over 3500 m (light gray)
     ]
-    axloc = [0.01,0.12,0.48,0.34]
+    axloc = [0.51,0.58,0.48,0.34]
     ax1 = fig.add_axes(axloc)
-    ax1.set_title('(c) Terrain height (m)', fontsize=12, color='Black')
+    ax1.set_title('(b) Terrain height (m)', fontsize=12, color='Black')
     if terrain_height is not None:
         CS3 = m.contourf(x, y, terrain_height, clevs_terrain,
             cmap=None, colors=colorst_terrain, extend='both')
         m.drawcoastlines(linewidth=0.6, color='Gray')
         m.drawcountries(linewidth=0.4, color='Gray')
         m.drawstates(linewidth=0.2, color='Gray')
-        cax = fig.add_axes([0.03,0.09,0.44,0.015])
+        cax = fig.add_axes([0.53,0.55,0.44,0.015])
         cb = plt.colorbar(CS3, orientation='horizontal', cax=cax,
             drawedges=True, ticks=clevs_terrain, format='%g')
         cb.ax.tick_params(labelsize=7)
         cb.set_label('Elevation (m)', fontsize=10)
+
+    # --- panel 3: Gamma Model POP
+    axloc = [0.01,0.12,0.48,0.34]
+    ax1 = fig.add_axes(axloc)
+    title = '(c) Attention ResUNet Gamma '+ltitle
+    ax1.set_title(title, fontsize=12,color='Black')
+    CS2 = m.contourf(x, y, lowprob_gamma, clevs_prob, \
+        cmap=None, colors=colorst, extend='both')
+    m.drawcoastlines(linewidth=0.6,color='Gray')
+    m.drawcountries(linewidth=0.4,color='Gray')
+    m.drawstates(linewidth=0.2,color='Gray')
+    cax = fig.add_axes([0.03,0.09,0.44,0.015])
+    cb = plt.colorbar(CS2, orientation='horizontal', cax=cax,\
+        drawedges=True, ticks=clevs_prob, format='%g')
+    cb.ax.tick_params(labelsize=7)
+    cb.set_label('Probability', fontsize=10)
 
     # --- panel 4: POP prob from GRAF convolution
     axloc = [0.51,0.12,0.48,0.34]
@@ -381,24 +381,7 @@ def plot_GRAF_small(lat_1, lat_2, lat_0, lon_0, lons, lats, \
     cb.ax.tick_params(labelsize=6)
     cb.set_label('Precipitation amount (mm)', fontsize=8)
 
-    # --- panel 2: low Gamma prob
-
-    axloc = [0.51,0.58,0.48,0.34]
-    ax1 = fig.add_axes(axloc)
-    title = '(b) Attention ResUNet '+ltitle
-    ax1.set_title(title, fontsize=11,color='Black')
-    CS2 = m.contourf(x, y, lowprob_gamma, clevs_prob, \
-        cmap=None, colors=colorst, extend='both')
-    m.drawcoastlines(linewidth=0.6,color='Gray')
-    m.drawcountries(linewidth=0.4,color='Gray')
-    m.drawstates(linewidth=0.2,color='Gray')
-    cax = fig.add_axes([0.53,0.55,0.44,0.015])
-    cb = plt.colorbar(CS2, orientation='horizontal', cax=cax,\
-        drawedges=True, ticks=clevs_prob, format='%g')
-    cb.ax.tick_params(labelsize=6)
-    cb.set_label('Probability', fontsize=8)
-
-    # --- panel 3: terrain height
+    # --- panel 2: terrain height
 
     clevs_terrain = [0, 300, 600, 900, 1200, 1600, 2000, 2500, 3500]
     colorst_terrain = [
@@ -413,20 +396,37 @@ def plot_GRAF_small(lat_1, lat_2, lat_0, lon_0, lons, lats, \
         '#A0A0A0',   # 2500-3500 m (gray)
         '#D8D8D8',   # over 3500 m (light gray)
     ]
-    axloc = [0.01,0.12,0.48,0.34]
+    axloc = [0.51,0.58,0.48,0.34]
     ax1 = fig.add_axes(axloc)
-    ax1.set_title('(c) Terrain height (m)', fontsize=11, color='Black')
+    ax1.set_title('(b) Terrain height (m)', fontsize=11, color='Black')
     if terrain_height is not None:
         CS3 = m.contourf(x, y, terrain_height, clevs_terrain,
             cmap=None, colors=colorst_terrain, extend='both')
         m.drawcoastlines(linewidth=0.6, color='Gray')
         m.drawcountries(linewidth=0.4, color='Gray')
         m.drawstates(linewidth=0.2, color='Gray')
-        cax = fig.add_axes([0.03,0.09,0.44,0.015])
+        cax = fig.add_axes([0.53,0.55,0.44,0.015])
         cb = plt.colorbar(CS3, orientation='horizontal', cax=cax,
             drawedges=True, ticks=clevs_terrain, format='%g')
         cb.ax.tick_params(labelsize=6)
         cb.set_label('Elevation (m)', fontsize=8)
+
+    # --- panel 3: Gamma Model POP
+
+    axloc = [0.01,0.12,0.48,0.34]
+    ax1 = fig.add_axes(axloc)
+    title = '(c) Attention ResUNet '+ltitle
+    ax1.set_title(title, fontsize=11,color='Black')
+    CS2 = m.contourf(x, y, lowprob_gamma, clevs_prob, \
+        cmap=None, colors=colorst, extend='both')
+    m.drawcoastlines(linewidth=0.6,color='Gray')
+    m.drawcountries(linewidth=0.4,color='Gray')
+    m.drawstates(linewidth=0.2,color='Gray')
+    cax = fig.add_axes([0.03,0.09,0.44,0.015])
+    cb = plt.colorbar(CS2, orientation='horizontal', cax=cax,\
+        drawedges=True, ticks=clevs_prob, format='%g')
+    cb.ax.tick_params(labelsize=6)
+    cb.set_label('Probability', fontsize=8)
 
     # --- panel 4: raw GRAF prob
 
