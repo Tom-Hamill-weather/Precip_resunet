@@ -1,5 +1,4 @@
 """
-python make_plots_gamma.py cyyyymmddhh clead
 e.g.,
 python make_plots_gamma.py 2025120812 12
 
@@ -159,9 +158,9 @@ def GRAF_precip_read(clead, cyyyymmddhh, GRAFdatadir_conus_new, GRAFdatadir_conu
 
 def probability_read(clead, cyyyymmddhh, GRAFprobsdir_conus_laptop):
 
-    # Updated to read Gamma model probability files
+    # Read Gamma mixture model probability files
     infile = GRAFprobsdir_conus_laptop + cyyyymmddhh + \
-        '_'+ clead + '_probs_gamma.nc'
+        '_'+ clead + '_probs_gamma_mixture.nc'
 
     nc = Dataset(infile,'r')
     fexist = os.path.exists(infile)
@@ -203,7 +202,8 @@ def probability_read(clead, cyyyymmddhh, GRAFprobsdir_conus_laptop):
 
 def plot_GRAF(lat_1, lat_2, lat_0, lon_0, lons, lats, \
         cyyyymmddhh, clead, precipitation_GRAF, lowprob_gamma, \
-        highprob_gamma, lowprob_raw, ltitle, htitle, GRAF_plot_dir):
+        highprob_gamma, lowprob_raw, ltitle, htitle, GRAF_plot_dir,
+        terrain_height=None):
 
     m = Basemap(rsphere=(6378137.00,6356752.3142),\
         resolution='l',projection='lcc',area_thresh=1000.,\
@@ -268,21 +268,34 @@ def plot_GRAF(lat_1, lat_2, lat_0, lon_0, lons, lats, \
     cb.ax.tick_params(labelsize=7)
     cb.set_label('Probability', fontsize=10)
 
-    # --- panel 3: high threshold prob
+    # --- panel 3: terrain height
+    clevs_terrain = [0, 300, 600, 900, 1200, 1600, 2000, 2500, 3500]
+    colorst_terrain = [
+        'White',     # under: sea level and below
+        '#D4F0B4',   # 0-300 m   (very light green)
+        '#90CC58',   # 300-600 m (light green)
+        '#D8C860',   # 600-900 m (yellow-green)
+        '#C89020',   # 900-1200 m (golden)
+        '#A06828',   # 1200-1600 m (tan-brown)
+        '#885040',   # 1600-2000 m (brown)
+        '#706060',   # 2000-2500 m (dark brown-gray)
+        '#A0A0A0',   # 2500-3500 m (gray)
+        '#D8D8D8',   # over 3500 m (light gray)
+    ]
     axloc = [0.01,0.12,0.48,0.34]
     ax1 = fig.add_axes(axloc)
-    title = '(c) Attention ResUNet Gamma '+htitle
-    ax1.set_title(title, fontsize=12,color='Black')
-    CS2 = m.contourf(x, y, highprob_gamma, clevs_prob, \
-        cmap=None, colors=colorst, extend='both')
-    m.drawcoastlines(linewidth=0.6,color='Gray')
-    m.drawcountries(linewidth=0.4,color='Gray')
-    m.drawstates(linewidth=0.2,color='Gray')
-    cax = fig.add_axes([0.03,0.09,0.44,0.015])
-    cb = plt.colorbar(CS2, orientation='horizontal', cax=cax,\
-        drawedges=True, ticks=clevs_prob, format='%g')
-    cb.ax.tick_params(labelsize=7)
-    cb.set_label('Probability', fontsize=10)
+    ax1.set_title('(c) Terrain height (m)', fontsize=12, color='Black')
+    if terrain_height is not None:
+        CS3 = m.contourf(x, y, terrain_height, clevs_terrain,
+            cmap=None, colors=colorst_terrain, extend='both')
+        m.drawcoastlines(linewidth=0.6, color='Gray')
+        m.drawcountries(linewidth=0.4, color='Gray')
+        m.drawstates(linewidth=0.2, color='Gray')
+        cax = fig.add_axes([0.03,0.09,0.44,0.015])
+        cb = plt.colorbar(CS3, orientation='horizontal', cax=cax,
+            drawedges=True, ticks=clevs_terrain, format='%g')
+        cb.ax.tick_params(labelsize=7)
+        cb.set_label('Elevation (m)', fontsize=10)
 
     # --- panel 4: POP prob from GRAF convolution
     axloc = [0.51,0.12,0.48,0.34]
@@ -314,7 +327,8 @@ def plot_GRAF(lat_1, lat_2, lat_0, lon_0, lons, lats, \
 def plot_GRAF_small(lat_1, lat_2, lat_0, lon_0, lons, lats, \
         llcrnrlon, llcrnrlat, urcrnrlon, urcrnrlat, \
         cyyyymmddhh, clead, precipitation_GRAF, lowprob_gamma, \
-        highprob_gamma, lowprob_raw, ltitle, htitle, GRAF_plot_dir):
+        highprob_gamma, lowprob_raw, ltitle, htitle, GRAF_plot_dir,
+        terrain_height=None):
 
     """
     plots in a smaller domain centered roughly on area of interest.
@@ -384,22 +398,35 @@ def plot_GRAF_small(lat_1, lat_2, lat_0, lon_0, lons, lats, \
     cb.ax.tick_params(labelsize=6)
     cb.set_label('Probability', fontsize=8)
 
-    # --- panel 3: high prob
+    # --- panel 3: terrain height
 
+    clevs_terrain = [0, 300, 600, 900, 1200, 1600, 2000, 2500, 3500]
+    colorst_terrain = [
+        'White',     # under: sea level and below
+        '#D4F0B4',   # 0-300 m   (very light green)
+        '#90CC58',   # 300-600 m (light green)
+        '#D8C860',   # 600-900 m (yellow-green)
+        '#C89020',   # 900-1200 m (golden)
+        '#A06828',   # 1200-1600 m (tan-brown)
+        '#885040',   # 1600-2000 m (brown)
+        '#706060',   # 2000-2500 m (dark brown-gray)
+        '#A0A0A0',   # 2500-3500 m (gray)
+        '#D8D8D8',   # over 3500 m (light gray)
+    ]
     axloc = [0.01,0.12,0.48,0.34]
     ax1 = fig.add_axes(axloc)
-    title = '(c) Attention ResUNet '+htitle
-    ax1.set_title(title, fontsize=11,color='Black')
-    CS2 = m.contourf(x, y, highprob_gamma, clevs_prob, \
-        cmap=None, colors=colorst, extend='both')
-    m.drawcoastlines(linewidth=0.6,color='Gray')
-    m.drawcountries(linewidth=0.4,color='Gray')
-    m.drawstates(linewidth=0.2,color='Gray')
-    cax = fig.add_axes([0.03,0.09,0.44,0.015])
-    cb = plt.colorbar(CS2, orientation='horizontal', cax=cax,\
-        drawedges=True, ticks=clevs_prob, format='%g')
-    cb.ax.tick_params(labelsize=6)
-    cb.set_label('Probability', fontsize=8)
+    ax1.set_title('(c) Terrain height (m)', fontsize=11, color='Black')
+    if terrain_height is not None:
+        CS3 = m.contourf(x, y, terrain_height, clevs_terrain,
+            cmap=None, colors=colorst_terrain, extend='both')
+        m.drawcoastlines(linewidth=0.6, color='Gray')
+        m.drawcountries(linewidth=0.4, color='Gray')
+        m.drawstates(linewidth=0.2, color='Gray')
+        cax = fig.add_axes([0.03,0.09,0.44,0.015])
+        cb = plt.colorbar(CS3, orientation='horizontal', cax=cax,
+            drawedges=True, ticks=clevs_terrain, format='%g')
+        cb.ax.tick_params(labelsize=6)
+        cb.set_label('Elevation (m)', fontsize=8)
 
     # --- panel 4: raw GRAF prob
 
@@ -459,6 +486,22 @@ istat_prob, raw_p0p25mm_prob, gamma_p0p25mm_prob, raw_p1mm_prob, \
     gamma_p1mm_prob, raw_p2p5mm_prob, gamma_p2p5mm_prob, raw_p5mm_prob, \
     gamma_p5mm_prob, raw_p10mm_prob, gamma_p10mm_prob, lat, lon = \
     probability_read(clead, cyyyymmddhh, GRAFprobsdir_conus_laptop)
+
+# Read terrain height from static file
+terrain_height = None
+_terrain_candidates = [
+    'GRAF_CONUS_terrain_info.nc',
+    f'{AWS_BASE_PATH}/terrain/GRAF_CONUS_terrain_info.nc' if AWS_BASE_PATH else None,
+]
+for _tf in _terrain_candidates:
+    if _tf and os.path.exists(_tf):
+        _tnc = Dataset(_tf, 'r')
+        terrain_height = _tnc.variables['terrain_height'][:,:]
+        _tnc.close()
+        print(f'Terrain read from {_tf}, max elevation = {terrain_height.max():.0f} m')
+        break
+if terrain_height is None:
+    print('Warning: terrain file not found, panel 3 will be blank.')
 
 # --- Here I've hard-coded domain locations and thresholds for
 #     cases of interest.
@@ -529,12 +572,14 @@ if istat_GRAF == 0 and istat_prob == 0:
 
     #istat = plot_GRAF(lat_1, lat_2, lat_0, lon_0, lons, lats, \
     #    cyyyymmddhh, clead, precipitation_GRAF, lowprob_gamma, \
-    #    highprob_gamma, lowprob_raw, ltitle, htitle, GRAF_plot_dir)
+    #    highprob_gamma, lowprob_raw, ltitle, htitle, GRAF_plot_dir,
+    #    terrain_height=terrain_height)
 
     istat = plot_GRAF_small(lat_1, lat_2, lat_0, lon_0, lons, lats, \
         llcrnrlon, llcrnrlat, urcrnrlon, urcrnrlat, \
         cyyyymmddhh, clead, precipitation_GRAF, lowprob_gamma, \
-        highprob_gamma, lowprob_raw, ltitle, htitle, GRAF_plot_dir)
+        highprob_gamma, lowprob_raw, ltitle, htitle, GRAF_plot_dir,
+        terrain_height=terrain_height)
 
 else:
     print ('GRAF forecast or probability data not found.')
