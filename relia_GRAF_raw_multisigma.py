@@ -193,7 +193,7 @@ cyyyymmddhh_list = daterange(cyyyymmddhh_begin, \
 # --- config file read for directory names.
 
 directory_object_name = 'DIRECTORIES'
-config_file = '../ini/config_hdo.ini'
+config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config_hdo.ini')
 MRMS_directory, probs_directory = \
     read_config_file(config_file, directory_object_name)
 

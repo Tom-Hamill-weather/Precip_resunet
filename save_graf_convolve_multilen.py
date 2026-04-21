@@ -219,7 +219,7 @@ nsigma = len(sigmas)
 # --- Various initialization from config file.
 
 directory_object_name = 'DIRECTORIES'
-config_file = '../ini/'+ config_file_name
+config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), config_file_name)
 print ('INFO: reading config items from ', config_file)
 GRAFdatadir_conus_old, GRAFdatadir_conus_new, probs_directory = \
     read_config_file(config_file, directory_object_name)
