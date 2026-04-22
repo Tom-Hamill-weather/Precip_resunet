@@ -93,7 +93,7 @@ def read_MRMS(MRMS_directory, date):
     fexist = os.path.exists(infile)
     if fexist == True:
         nc = Dataset(infile, 'r')
-        quality = nc.variables['quality'][:,:]
+        quality = nc.variables['data_quality'][:,:]
         observations = nc.variables['precipitation'][:,:]
         istat = 0
         nc.close()
@@ -233,7 +233,7 @@ for idate, date in enumerate(cyyyymmddhh_list):
     # --- read MRMS data.
 
     date_forecast = dateshift(date, int(clead))
-    observations, quality, istat_mrms = read_MRMS(MRMS_directory, date_forecast)
+    observations, data_quality, istat_mrms = read_MRMS(MRMS_directory, date_forecast)
 
     if istat_mrms != 0:
         print ('skipping date ', date, ' (MRMS file missing)')
@@ -263,7 +263,7 @@ for idate, date in enumerate(cyyyymmddhh_list):
             # --- Compute contingency tables and Brier Score
 
             contab_raw, BS_raw, nsamps_raw = compute_contab_BS(ny, nx,
-                raw_prob, observations, quality, contab_raw, ncats, thresh)
+                raw_prob, observations, data_quality, contab_raw, ncats, thresh)
 
             contab_raw_sigmas[ithresh,:,:,isigma] = \
                 contab_raw_sigmas[ithresh,:,:,isigma] + contab_raw[:,:]
