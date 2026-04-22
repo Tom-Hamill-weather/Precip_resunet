@@ -229,8 +229,8 @@ if istat_graf == 0 and istat_mrms == 0:
 
     latb = clat_center - 10.0
     late = clat_center + 10.0
-    lonb = clon_center - 10.0
-    lone = clon_center + 10.0
+    lonb = clon_center - 17.0
+    lone = clon_center + 17.0
 
     m = Basemap(rsphere=(6378137.00,6356752.3142),\
         resolution='l',area_thresh=1000.,projection='lcc',\
