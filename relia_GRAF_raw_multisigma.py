@@ -97,6 +97,18 @@ def read_MRMS(MRMS_directory, date):
         observations = nc.variables['precipitation'][:,:]
         istat = 0
         nc.close()
+
+        # ---- QC diagnostics
+        ntotal = quality.size
+        nbad_quality = np.sum(quality <= 0.5)
+        nneg_precip = np.sum(observations < 0.0)
+        nhigh_precip = np.sum(observations > 200.0)
+        ngood = np.sum(quality > 0.5)
+        print(f'  MRMS QC: quality range [{quality.min():.3f}, {quality.max():.3f}], '
+              f'{nbad_quality}/{ntotal} pixels filtered (quality<=0.5)')
+        print(f'  MRMS QC: precip range [{observations.min():.3f}, {observations.max():.3f}] mm, '
+              f'{nneg_precip} pixels <0, {nhigh_precip} pixels >200mm')
+        print(f'  MRMS QC: {ngood} good-quality pixels retained ({100.*ngood/ntotal:.1f}%)')
     else:
         istat = -1
         quality = np.empty((0,0),dtype=float)
@@ -107,7 +119,7 @@ def read_MRMS(MRMS_directory, date):
 # ============================================================
 
 def compute_contab_BS(ny, nx, prob, obs, quality, contab, ncats,
-        threshold):
+        threshold, verbose=False):
 
     """ For this case day, compute the contingency table elements
         and Brier Score, using 2D gridded arrays. """
@@ -124,6 +136,14 @@ def compute_contab_BS(ny, nx, prob, obs, quality, contab, ncats,
     a = np.where(np.logical_and(quality > 0.5,
         np.logical_and(obs >= 0.0, np.logical_and(obs < threshold, obs <= 200.0))))
     binary_obs[a] = 0
+
+    if verbose:
+        nevents = np.sum(binary_obs == 1)
+        nnonevents = np.sum(binary_obs == 0)
+        nfiltered = np.sum(binary_obs == -1)
+        base_rate = nevents / float(nevents + nnonevents) if (nevents + nnonevents) > 0 else -99.
+        print(f'    thresh={threshold:.3f}mm: events={nevents}, non-events={nnonevents}, '
+              f'filtered={nfiltered}, base_rate={base_rate:.3f}')
 
     # ---- Contingency table: count hits/non-hits per probability category.
 
@@ -283,7 +303,8 @@ if not cache_loaded:
                 # --- Compute contingency tables and Brier Score
 
                 contab_raw, BS_raw, nsamps_raw = compute_contab_BS(ny, nx,
-                    raw_prob, observations, data_quality, contab_raw, ncats, thresh)
+                    raw_prob, observations, data_quality, contab_raw, ncats, thresh,
+                    verbose=(isigma == 0))
 
                 contab_raw_sigmas[ithresh,:,:,isigma] = \
                     contab_raw_sigmas[ithresh,:,:,isigma] + contab_raw[:,:]
