@@ -62,11 +62,11 @@ def read_probs(filename):
         nc = Dataset(filename,'r')
         lats = nc.variables['lats'][:,:]
         lons = nc.variables['lons'][:,:]
-        p0p25mm_raw = nc.variables['p0p25mm_raw_forecast'][:,:,:]
-        p1mm_raw = nc.variables['p1mm_raw_forecast'][:,:,:]
-        p5mm_raw = nc.variables['p5mm_raw_forecast'][:,:,:]
-        p10mm_raw = nc.variables['p10mm_raw_forecast'][:,:,:]
-        sigmas = nc.variables['sigmas'][:]
+        p0p25mm_raw = nc.variables['p0p25mm_raw_forecast'][:,:,:].filled(-99.99)
+        p1mm_raw = nc.variables['p1mm_raw_forecast'][:,:,:].filled(-99.99)
+        p5mm_raw = nc.variables['p5mm_raw_forecast'][:,:,:].filled(-99.99)
+        p10mm_raw = nc.variables['p10mm_raw_forecast'][:,:,:].filled(-99.99)
+        sigmas = nc.variables['sigmas'][:].filled(-99.99)
         ny, nx = np.shape(lats)
         nsigmas = len(sigmas)
         nc.close()
@@ -93,8 +93,8 @@ def read_MRMS(MRMS_directory, date):
     fexist = os.path.exists(infile)
     if fexist == True:
         nc = Dataset(infile, 'r')
-        quality = nc.variables['data_quality'][:,:]
-        observations = nc.variables['precipitation'][:,:]
+        quality = nc.variables['data_quality'][:,:].filled(0.0)
+        observations = nc.variables['precipitation'][:,:].filled(-1.0)
         istat = 0
         nc.close()
 
@@ -151,13 +151,14 @@ def compute_contab_BS(ny, nx, prob, obs, quality, contab, ncats,
         pmin = np.max([0.0, float(icat) / (ncats-1) - 1./(2*(ncats-1))])
         pmax = np.min([1.0, float(icat) / (ncats-1) + 1./(2*(ncats-1))])
 
-        a = np.where(np.logical_and(
-            np.logical_and(prob >= pmin, prob < pmax), binary_obs == 1))
+        in_bin = np.logical_and(prob >= pmin,
+            prob <= pmax if icat == ncats-1 else prob < pmax)
+
+        a = np.where(np.logical_and(in_bin, binary_obs == 1))
         if len(a[0]) > 0:
             contab[icat,1] = contab[icat,1] + len(a[0])
 
-        a = np.where(np.logical_and(
-            np.logical_and(prob >= pmin, prob < pmax), binary_obs == 0))
+        a = np.where(np.logical_and(in_bin, binary_obs == 0))
         if len(a[0]) > 0:
             contab[icat,0] = contab[icat,0] + len(a[0])
 
@@ -197,7 +198,7 @@ clead = sys.argv[3]
 cleadb = str(int(clead)-1)
 print (cyyyymmddhh_begin, cyyyymmddhh_end, clead)
 cmtit = 'GRAF'
-pthresholds = [0.254, 1.0, 5.0, 10.0]
+pthresholds = [0.25, 1.0, 5.0, 10.0]
 nthresholds = len(pthresholds)
 ncats = 11
 
