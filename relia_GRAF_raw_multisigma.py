@@ -296,7 +296,7 @@ for ithresh, thresh in enumerate(pthresholds):
 
     ctthresh = str(thresh)
     ctitle = r''+cleadb+'-'+clead+' h '+cmtit+' reliability, '+\
-        'precip $\geq$ '+ctthresh+' mm,\n'+\
+        r'precip $\geq$ '+ctthresh+r' mm,'+'\n'+\
         cyyyymmddhh_begin+' to '+cyyyymmddhh_end
 
     print ('making plots for threshold = ', thresh)
