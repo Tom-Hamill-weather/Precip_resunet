@@ -295,6 +295,11 @@ if not cache_loaded:
                     raw_prob = p0p25mm_raw[isigma, :,:]
                 elif ithresh == 1:
                     raw_prob = p1mm_raw[isigma, :,:]
+                    if isigma == 3:
+                        p50, p90, p95, p99 = np.percentile(raw_prob, [50, 90, 95, 99])
+                        print(f'    GRAF p(>=1mm) sigma[3] percentiles: '
+                              f'50th={p50:.4f}, 90th={p90:.4f}, '
+                              f'95th={p95:.4f}, 99th={p99:.4f}')
                 elif ithresh == 2:
                     raw_prob = p5mm_raw[isigma, :,:]
                 elif ithresh == 3:
