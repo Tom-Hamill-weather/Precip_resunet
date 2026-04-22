@@ -117,11 +117,12 @@ def compute_contab_BS(ny, nx, prob, obs, quality, contab, ncats,
 
     binary_obs = -1*np.ones((ny, nx), dtype=int)
 
-    a = np.where(np.logical_and(obs >= threshold, quality >= 0.5))
+    a = np.where(np.logical_and(quality > 0.5,
+        np.logical_and(obs >= threshold, obs <= 200.0)))
     binary_obs[a] = 1
 
     a = np.where(np.logical_and(quality > 0.5,
-        np.logical_and(obs < threshold, obs >= 0.0)))
+        np.logical_and(obs >= 0.0, np.logical_and(obs < threshold, obs <= 200.0))))
     binary_obs[a] = 0
 
     # ---- Contingency table: count hits/non-hits per probability category.
@@ -173,7 +174,7 @@ def compute_relia(contab, ncats, frequse, relia):
 cyyyymmddhh_begin = sys.argv[1]
 cyyyymmddhh_end = sys.argv[2]
 clead = sys.argv[3]
-cleadb = str(int(clead)-6)
+cleadb = str(int(clead)-1)
 print (cyyyymmddhh_begin, cyyyymmddhh_end, clead)
 cmtit = 'GRAF'
 pthresholds = [0.254, 1.0, 5.0, 10.0]
@@ -205,72 +206,100 @@ relia_raw_sigmas = -99.99*np.ones((nthresholds, ncats,nsigmas), dtype=np.float64
 BS_raw_sigmas = np.zeros((nthresholds, nsigmas), dtype=float)
 nsamps_sigmas = np.zeros((nthresholds, nsigmas), dtype=float)
 
-# --- loop over dates
+# --- Cache file: if it exists, load accumulated arrays and skip the date loop.
 
-for idate, date in enumerate(cyyyymmddhh_list):
-    print ('idate, date = ', idate, date)
+relia_save_dir = '/data/resnet_data/relia'
+cache_file = os.path.join(relia_save_dir,
+    f'relia_GRAF_raw_{cyyyymmddhh_begin}_to_{cyyyymmddhh_end}_lead{clead}h.cPick')
 
-    # --- read GRAF from netCDF f/o file.
+cache_loaded = False
+if os.path.exists(cache_file):
+    print(f'Loading cached accumulated data from {cache_file}')
+    with open(cache_file, 'rb') as f:
+        cache = cPickle.load(f)
+    contab_raw_sigmas = cache['contab_raw_sigmas']
+    BS_raw_sigmas = cache['BS_raw_sigmas']
+    nsamps_sigmas = cache['nsamps_sigmas']
+    cache_loaded = True
+    print('Cache loaded; skipping date loop.')
 
-    if int(date) > 2024040512:
-        cmodel_in = 'graf_conus'
-    else:
-        cmodel_in = 'graflr_conus'
+if not cache_loaded:
 
-    input_directory = probs_directory + \
-        cmodel_in + '/' + date[0:6] + '/'
-    input_file = input_directory + cmodel_in + \
-        '_1h_probs_multisigma_IC' + \
-        date + '_lead' + clead + 'h.nc'
+    # --- loop over dates
 
-    ny, nx, lats, lons, p0p25mm_raw, p1mm_raw, p5mm_raw, \
-        p10mm_raw, sigmas, nsigmas = read_probs(input_file)
+    for idate, date in enumerate(cyyyymmddhh_list):
+        print ('idate, date = ', idate, date)
 
-    if ny == 0:
-        print ('skipping date ', date, ' (prob file missing)')
-        continue
+        # --- read GRAF from netCDF f/o file.
 
-    # --- read MRMS data.
+        if int(date) > 2024040512:
+            cmodel_in = 'graf_conus'
+        else:
+            cmodel_in = 'graflr_conus'
 
-    date_forecast = dateshift(date, int(clead))
-    observations, data_quality, istat_mrms = read_MRMS(MRMS_directory, date_forecast)
+        input_directory = probs_directory + \
+            cmodel_in + '/' + date[0:6] + '/'
+        input_file = input_directory + cmodel_in + \
+            '_1h_probs_multisigma_IC' + \
+            date + '_lead' + clead + 'h.nc'
 
-    if istat_mrms != 0:
-        print ('skipping date ', date, ' (MRMS file missing)')
-        continue
+        ny, nx, lats, lons, p0p25mm_raw, p1mm_raw, p5mm_raw, \
+            p10mm_raw, sigmas, nsigmas = read_probs(input_file)
 
-    # --- process each threshold and sigma
+        if ny == 0:
+            print ('skipping date ', date, ' (prob file missing)')
+            continue
 
-    for ithresh, thresh in enumerate(pthresholds):
+        # --- read MRMS data.
 
-        for isigma in range(nsigmas):
+        date_forecast = dateshift(date, int(clead))
+        observations, data_quality, istat_mrms = read_MRMS(MRMS_directory, date_forecast)
 
-            # ---- Declare per-date arrays
+        if istat_mrms != 0:
+            print ('skipping date ', date, ' (MRMS file missing)')
+            continue
 
-            contab_raw = np.zeros((ncats,2), dtype=int)
+        # --- process each threshold and sigma
 
-            # --- Populate the data depending on the event threshold.
+        for ithresh, thresh in enumerate(pthresholds):
 
-            if ithresh == 0:
-                raw_prob = p0p25mm_raw[isigma, :,:]
-            elif ithresh == 1:
-                raw_prob = p1mm_raw[isigma, :,:]
-            elif ithresh == 2:
-                raw_prob = p5mm_raw[isigma, :,:]
-            elif ithresh == 3:
-                raw_prob = p10mm_raw[isigma, :,:]
+            for isigma in range(nsigmas):
 
-            # --- Compute contingency tables and Brier Score
+                # ---- Declare per-date arrays
 
-            contab_raw, BS_raw, nsamps_raw = compute_contab_BS(ny, nx,
-                raw_prob, observations, data_quality, contab_raw, ncats, thresh)
+                contab_raw = np.zeros((ncats,2), dtype=int)
 
-            contab_raw_sigmas[ithresh,:,:,isigma] = \
-                contab_raw_sigmas[ithresh,:,:,isigma] + contab_raw[:,:]
-            BS_raw_sigmas[ithresh,isigma] = \
-                BS_raw_sigmas[ithresh,isigma] + BS_raw
-            nsamps_sigmas[ithresh,isigma] = \
-                nsamps_sigmas[ithresh,isigma] + nsamps_raw
+                # --- Populate the data depending on the event threshold.
+
+                if ithresh == 0:
+                    raw_prob = p0p25mm_raw[isigma, :,:]
+                elif ithresh == 1:
+                    raw_prob = p1mm_raw[isigma, :,:]
+                elif ithresh == 2:
+                    raw_prob = p5mm_raw[isigma, :,:]
+                elif ithresh == 3:
+                    raw_prob = p10mm_raw[isigma, :,:]
+
+                # --- Compute contingency tables and Brier Score
+
+                contab_raw, BS_raw, nsamps_raw = compute_contab_BS(ny, nx,
+                    raw_prob, observations, data_quality, contab_raw, ncats, thresh)
+
+                contab_raw_sigmas[ithresh,:,:,isigma] = \
+                    contab_raw_sigmas[ithresh,:,:,isigma] + contab_raw[:,:]
+                BS_raw_sigmas[ithresh,isigma] = \
+                    BS_raw_sigmas[ithresh,isigma] + BS_raw
+                nsamps_sigmas[ithresh,isigma] = \
+                    nsamps_sigmas[ithresh,isigma] + nsamps_raw
+
+    # --- Save accumulated arrays to cache for future re-runs.
+
+    os.makedirs(relia_save_dir, exist_ok=True)
+    print(f'Saving accumulated data to cache: {cache_file}')
+    with open(cache_file, 'wb') as f:
+        cPickle.dump({'contab_raw_sigmas': contab_raw_sigmas,
+                      'BS_raw_sigmas': BS_raw_sigmas,
+                      'nsamps_sigmas': nsamps_sigmas}, f)
 
 # --- Calculate frequency of use and reliability from accumulated contab arrays.
 
@@ -356,8 +385,3 @@ for ithresh, thresh in enumerate(pthresholds):
     plt.savefig(plot_title, dpi=300)
     plt.close(fig)
 
-outfile = 'Brierscores_lead='+clead+'.cPick'
-print ('writing to ', outfile)
-ouf = open(outfile, 'wb')
-cPickle.dump(BS_raw_sigmas, ouf)
-ouf.close()
