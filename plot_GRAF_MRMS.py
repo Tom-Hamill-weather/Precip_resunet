@@ -163,7 +163,7 @@ class GRAFDataProcessor:
         cyyyymm = cyyyymmddhh[0:6] + '/'
         filename = f'MRMS_1h_pamt_and_data_qual_{cyyyymmddhh}.nc'
         filepath = os.path.join(\
-            self.dirs["mrms_data_directory"], cyyyymm, filename)
+            self.dirs["MRMS_directory"], cyyyymm, filename)
         print ('looking for ', filepath)
 
         if not os.path.exists(filepath):
