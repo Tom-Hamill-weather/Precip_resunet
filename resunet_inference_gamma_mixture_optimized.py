@@ -184,17 +184,17 @@ def init_sigma(cyyyymmddhh, clead):
     Increases with lead time to account for growing uncertainty.
     """
     lc = int(clead)
-    if lc <= 6:   sigma = 5.0 * 4./3.
-    elif lc <= 12: sigma = 10.0 * 4./3.
-    elif lc <= 18: sigma = 10.0 * 4./3.
-    elif lc <= 24: sigma = 15.0 * 4./3.
-    elif lc <= 30: sigma = 25.0 * 4./3.
-    elif lc <= 36: sigma = 30.0 * 4./3.
-    elif lc <= 42: sigma = 30.0 * 4./3.
-    elif lc <= 48: sigma = 40.0 * 4./3.
-    elif lc <= 54: sigma = 50.0 * 4./3.
-    elif lc <= 60: sigma = 50.0 * 4./3.
-    else:          sigma = 60.0 * 4./3.
+    if lc <= 6:   sigma = 15.
+    elif lc <= 12: sigma = 15.
+    elif lc <= 18: sigma = 20.
+    elif lc <= 24: sigma = 20.
+    elif lc <= 30: sigma = 20.
+    elif lc <= 36: sigma = 25.
+    elif lc <= 42: sigma = 25.
+    elif lc <= 48: sigma = 25.
+    elif lc <= 54: sigma = 30.
+    elif lc <= 60: sigma = 30.
+    else:          sigma = 30.
     return sigma
 
 # ---------------------------------------------------------------
