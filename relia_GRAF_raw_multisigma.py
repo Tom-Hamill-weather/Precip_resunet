@@ -304,7 +304,7 @@ if not cache_loaded:
 
                 contab_raw, BS_raw, nsamps_raw = compute_contab_BS(ny, nx,
                     raw_prob, observations, data_quality, contab_raw, ncats, thresh,
-                    verbose=(isigma == 0))
+                    verbose=(isigma == 3))
 
                 contab_raw_sigmas[ithresh,:,:,isigma] = \
                     contab_raw_sigmas[ithresh,:,:,isigma] + contab_raw[:,:]
