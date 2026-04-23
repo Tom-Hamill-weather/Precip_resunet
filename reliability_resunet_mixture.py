@@ -257,11 +257,13 @@ def read_MRMS(mrms_data_directory, cyyyymmddhh_verif):
 def compute_contab_BS(nstns, prob, obs, ncats, threshold, coslat):
     """
     VECTORIZED VERSION: Compute contingency table and Brier Score.
-    Much faster than looping through categories.
+    Returns fmean_sum and fmean_count (instead of fmean) so callers
+    can accumulate across multiple cases before computing the mean.
     """
 
     contab = np.zeros((ncats, 2), dtype=float)
-    fmean = np.zeros((ncats), dtype=float)
+    fmean_sum = np.zeros((ncats), dtype=float)
+    fmean_count = np.zeros((ncats), dtype=float)
 
     # Convert observations to binary
     binary_obs = (obs >= threshold).astype(int)
@@ -283,8 +285,9 @@ def compute_contab_BS(nstns, prob, obs, ncats, threshold, coslat):
     for icat in range(ncats):
         mask = (bins == icat)
         if np.any(mask):
-            # Compute mean forecast probability for this bin
-            fmean[icat] = np.mean(prob[mask])
+            # Accumulate sum and count for mean forecast probability
+            fmean_sum[icat] = np.sum(prob[mask])
+            fmean_count[icat] = np.sum(mask)
 
             # Count events and non-events weighted by coslat
             event_mask = mask & (binary_obs == 1)
@@ -298,7 +301,7 @@ def compute_contab_BS(nstns, prob, obs, ncats, threshold, coslat):
     BS = np.sum(BS_terms)
     nsamps = np.sum(coslat)
 
-    return contab, BS, nsamps, fmean
+    return contab, BS, nsamps, fmean_sum, fmean_count
 
 # --------------------------------------------------------
 
@@ -354,36 +357,25 @@ GRAFdatadir_conus, GRAFprobsdir_conus, \
     GRAF_plot_dir, mrms_data_directory = \
     read_config_file(config_file_name, 'DIRECTORIES')
 
-# ---- Declare arrays
+# ---- Declare running-sum accumulators
 
-contab_raw = np.zeros((nthresholds, ncats,2), dtype=int)
-frequse_raw = np.zeros((nthresholds, ncats), dtype=np.float64)
-fmean_raw = np.zeros((ncats), dtype=np.float64)
-relia_raw = -99.99*np.ones((nthresholds, ncats), dtype=np.float64)
+contab_raw = np.zeros((nthresholds, ncats, 2), dtype=float)
 BS_raw = np.zeros((nthresholds), dtype=float)
-nsamps_raw = np.zeros((nthresholds), dtype=int)
+nsamps_raw = np.zeros((nthresholds), dtype=float)
+fmean_raw_sum = np.zeros((nthresholds, ncats), dtype=float)
+fmean_raw_count = np.zeros((nthresholds, ncats), dtype=float)
 
-contab_gamma = np.zeros((nthresholds, ncats,2), dtype=int)
-frequse_gamma = np.zeros((nthresholds, ncats), dtype=np.float64)
-fmean_gamma = np.zeros((ncats), dtype=np.float64)
-relia_gamma = -99.99*np.ones((nthresholds, ncats), dtype=np.float64)
+contab_gamma = np.zeros((nthresholds, ncats, 2), dtype=float)
 BS_gamma = np.zeros((nthresholds), dtype=float)
-nsamps_gamma = np.zeros((nthresholds), dtype=int)
+nsamps_gamma = np.zeros((nthresholds), dtype=float)
+fmean_gamma_sum = np.zeros((nthresholds, ncats), dtype=float)
+fmean_gamma_count = np.zeros((nthresholds, ncats), dtype=float)
 
-# --- loop over dates using dynamic lists (no pre-allocation)
-
-# Initialize lists to store only valid data
-raw_probs = {thresh: [] for thresh in pthresholds}
-gamma_probs = {thresh: [] for thresh in pthresholds}
-mrms_precip_list = []
-mrms_quality_list = []
-coslat_list = []
-lats_list = []
-lons_list = []
+# --- loop over dates, accumulating contingency table and BS data
 
 lats_save = None
 lons_save = None
-coslat_save = None
+ngood = 0
 
 for idate, date in enumerate(cyyyymmddhh_list):
     print ('-------- idate, date = ', idate, date)
@@ -397,33 +389,52 @@ for idate, date in enumerate(cyyyymmddhh_list):
     if lats_save is None and istat_prob == 0:
         lats_save = lat
         lons_save = lon
-        coslat_save = np.cos(lat * 3.1415926 / 180.)
 
     # ---- Read MRMS hourly accumulated precip and data quality
     istat_MRMS, MRMS_precip, MRMS_quality = \
         read_MRMS(mrms_data_directory, validity_date)
 
-    # ---- If all files available, append to lists
     print ('istat_MRMS, istat_prob = ', istat_MRMS, istat_prob)
-    if istat_MRMS == 0 and istat_prob == 0:
-        # Append probability data for each threshold
-        for thresh in pthresholds:
-            raw_probs[thresh].append(probs[thresh]['raw'])
-            gamma_probs[thresh].append(probs[thresh]['gamma'])
+    if istat_MRMS != 0 or istat_prob != 0:
+        continue
 
-        # Append MRMS data
-        mrms_precip_list.append(MRMS_precip)
-        mrms_quality_list.append(MRMS_quality)
+    ngood += 1
 
-        # Append lat/lon/coslat
-        lats_list.append(lat)
-        lons_list.append(lon)
-        coslat = np.cos(lat * 3.1415926 / 180.)
-        coslat_list.append(coslat)
+    # Cosine-latitude weights for this date
+    coslat = np.cos(lat * 3.1415926 / 180.)
 
-# --- Convert lists to arrays (only valid dates included)
+    # Quality mask: valid precip range and sufficient data quality
+    quality_mask = (MRMS_precip >= 0.0) & \
+                   (MRMS_quality >= 0.5) & \
+                   (MRMS_precip < 100.0)
 
-ngood = len(mrms_precip_list)
+    observations = MRMS_precip[quality_mask]
+    coslat_flat = coslat[quality_mask]
+    nobs = len(observations)
+    print (f'  Valid observations: {nobs:,}')
+
+    # ---- Accumulate contingency table and BS for each threshold
+    for ithresh, thresh in enumerate(pthresholds):
+
+        prob_forecast_raw = probs[thresh]['raw'][quality_mask]
+        ctab, bs, ns, fm_sum, fm_count = compute_contab_BS(
+            nobs, prob_forecast_raw, observations, ncats, thresh, coslat_flat)
+        contab_raw[ithresh] += ctab
+        BS_raw[ithresh] += bs
+        nsamps_raw[ithresh] += ns
+        fmean_raw_sum[ithresh] += fm_sum
+        fmean_raw_count[ithresh] += fm_count
+
+        prob_forecast_gamma = probs[thresh]['gamma'][quality_mask]
+        ctab, bs, ns, fm_sum, fm_count = compute_contab_BS(
+            nobs, prob_forecast_gamma, observations, ncats, thresh, coslat_flat)
+        contab_gamma[ithresh] += ctab
+        BS_gamma[ithresh] += bs
+        nsamps_gamma[ithresh] += ns
+        fmean_gamma_sum[ithresh] += fm_sum
+        fmean_gamma_count[ithresh] += fm_count
+
+# ---- Check that we have usable data
 
 if ngood == 0:
     print("\n ERROR: No dates with complete data found!")
@@ -434,76 +445,32 @@ if ngood == 0:
 
 print(f"\n Found {ngood} dates with complete data out of {ndates} total dates")
 
-# Convert lists to numpy arrays - much faster than pre-allocating and deleting
-lats_all = np.array(lats_list)
-lons_all = np.array(lons_list)
-coslat_all = np.array(coslat_list)
-MRMS_precip_all = np.array(mrms_precip_list)
-MRMS_data_quality_all = np.array(mrms_quality_list)
-
-# Convert probability dictionaries to arrays
-raw_ensemble_probs = {thresh: np.array(raw_probs[thresh]) for thresh in pthresholds}
-gamma_ensemble_probs = {thresh: np.array(gamma_probs[thresh]) for thresh in pthresholds}
-
-ndates, ny, nx = np.shape(MRMS_precip_all)
-print(f"Array shape: ({ndates}, {ny}, {nx})")
-
-# ---- Process this threshold
+# ---- Compute reliability, frequency of usage, and Brier score per threshold
 
 for ithresh, thresh in enumerate(pthresholds):
 
     print ('Processing threshold = ', thresh)
 
-    # MEMORY OPTIMIZATION: Apply quality filter BEFORE flattening
-    # Create boolean mask on 3D arrays (much more memory efficient)
-    print ('  Creating quality mask...')
-    quality_mask = (MRMS_precip_all >= 0.0) & \
-                   (MRMS_data_quality_all >= 0.5) & \
-                   (MRMS_precip_all < 100.0)
-
-    # Extract only valid points (no need to flatten everything first!)
-    print ('  Extracting valid points...')
-    observations = MRMS_precip_all[quality_mask]
-    prob_forecast_raw = raw_ensemble_probs[thresh][quality_mask]
-    prob_forecast_gamma = gamma_ensemble_probs[thresh][quality_mask]
-    coslat_flat = coslat_all[quality_mask]
-
-    nobs = len(observations)
-    print (f'  Valid observations: {nobs:,} (reduced from {MRMS_precip_all.size:,})')
-
-    # Note: We don't need lats/lons for the contingency table computation
-
-    # --- contingency tables for raw
-
-    print ('  Computing contingency table for Raw')
-    contab_raw[ithresh,:,:], BS_raw[ithresh], \
-        nsamps_raw[ithresh], fmean_raw = \
-        compute_contab_BS(nobs, prob_forecast_raw, \
-        observations, ncats, thresh, coslat_flat)
+    # Compute mean forecast probability per bin from accumulated sums
+    fmean_raw = np.where(fmean_raw_count[ithresh] > 0,
+                         fmean_raw_sum[ithresh] / fmean_raw_count[ithresh],
+                         0.0)
+    fmean_gamma = np.where(fmean_gamma_count[ithresh] > 0,
+                           fmean_gamma_sum[ithresh] / fmean_gamma_count[ithresh],
+                           0.0)
     print ('fmean raw: ', fmean_raw)
-
-    print ('  Computing contingency table for Gamma mixture')
-    contab_gamma[ithresh,:,:], BS_gamma[ithresh], \
-        nsamps_gamma[ithresh], fmean_gamma = \
-        compute_contab_BS(nobs, prob_forecast_gamma, \
-        observations, ncats, thresh, coslat_flat)
     print ('fmean gamma mixture: ', fmean_gamma)
-
-
-    cthresh = r'P(obs $\geq$ '+str(thresh) + ' mm)'
-    ctthresh = str(thresh)+'mm'
-
-    # --- Calculate frequency of use and reliability for raw
 
     frequse_raw, relia_raw = compute_relia(contab_raw[ithresh,:,:], ncats)
     BS_raw[ithresh] = BS_raw[ithresh] / float(nsamps_raw[ithresh])
 
-    # --- Calculate frequency of use and reliability for Gamma mixture
-
-    frequse_gamma, relia_gamma = compute_relia(\
+    frequse_gamma, relia_gamma = compute_relia(
         contab_gamma[ithresh,:,:], ncats)
     BS_gamma[ithresh] = BS_gamma[ithresh] / \
         float(nsamps_gamma[ithresh])
+
+    cthresh = r'P(obs $\geq$ '+str(thresh) + ' mm)'
+    ctthresh = str(thresh)+'mm'
 
     # ----- Make plots of 6-h reliability and frequency of usage
 
@@ -570,4 +537,3 @@ for ithresh, thresh in enumerate(pthresholds):
         ctthresh + '_' + clead + 'h.png'
     print ('  Saving plot to file = ',plot_title)
     plt.savefig(plot_title, dpi=300)
-
