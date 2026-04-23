@@ -5,7 +5,7 @@ Usage:
     python plot_patch_selection.py cyyyymmddhh clead
 
 Example:
-    python plot_patch_selection.py 2025120100 12
+    python plot_patch_selection.py 2025021700 12   # Feb 17 2025 – widespread SE flooding
 
 Illustrates the 96×96 patch sampling used in save_patched_GRAF_MRMS_GFS.py.
 Reads raw GRAF precipitation and MRMS quality data, runs the micro-sampling
@@ -163,12 +163,15 @@ def main():
     print(f"Selected {len(j_sel)} patches")
 
     # ── Basemap ───────────────────────────────────────────────────────────────
+    # Use explicit CONUS-focused bounds so the data fills the figure; the full
+    # GRAF domain extends well into Canada and Mexico, leaving wide triangular
+    # whitespace at the corners when the grid corners are used directly.
     m = Basemap(
         rsphere=(6378137.00, 6356752.3142),
         resolution='l', area_thresh=1000., projection='lcc',
         lat_1=35., lat_2=45., lat_0=40., lon_0=-100.,
-        llcrnrlon=lons[0, 0],   llcrnrlat=lats[0, 0],
-        urcrnrlon=lons[-1, -1], urcrnrlat=lats[-1, -1]
+        llcrnrlon=-126.0, llcrnrlat=22.0,
+        urcrnrlon=-64.5,  urcrnrlat=50.5,
     )
     xg, yg = m(lons, lats)
 
@@ -182,14 +185,14 @@ def main():
     norm  = mcolors.BoundaryNorm(clevs, len(colorst), clip=True)
 
     # ── Figure ────────────────────────────────────────────────────────────────
-    fig, ax = plt.subplots(figsize=(13, 7.5))
-    fig.subplots_adjust(left=0.01, right=0.99, bottom=0.10, top=0.92)
+    fig, ax = plt.subplots(figsize=(13, 10))
+    fig.subplots_adjust(left=0.01, right=0.99, bottom=0.13, top=0.93)
 
     ax.set_title(
         f"GRAF 1-h precipitation and selected 96×96 training patches\n"
         f"Init: {cyyyymmddhh}   Valid: {valid}   Lead: +{clead} h   "
         f"N = {len(j_sel)} patches",
-        fontsize=11
+        fontsize=20
     )
 
     CS = m.pcolormesh(xg, yg, precip_graf, cmap=cmap, norm=norm,
@@ -199,11 +202,11 @@ def main():
     m.drawstates(linewidth=0.3,      color='Gray',  ax=ax)
 
     # Colorbar
-    cax = fig.add_axes([0.10, 0.04, 0.80, 0.022])
+    cax = fig.add_axes([0.08, 0.05, 0.84, 0.026])
     cb  = plt.colorbar(CS, orientation='horizontal', cax=cax,
                         drawedges=True, ticks=clevs, format='%g', extend='max')
-    cb.ax.tick_params(labelsize=7)
-    cb.set_label('1-h accumulated precipitation (mm)', fontsize=8)
+    cb.ax.tick_params(labelsize=13)
+    cb.set_label('1-h accumulated precipitation (mm)', fontsize=14)
 
     # ── Patch rectangles ──────────────────────────────────────────────────────
     # Build polygon corners for each selected patch in map coordinates.
