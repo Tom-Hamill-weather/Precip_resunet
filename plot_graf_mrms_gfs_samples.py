@@ -7,6 +7,8 @@ Now includes GFS features: PWAT and column-average relative humidity (r).
 import sys
 import os
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # non-interactive backend; avoids probing display on headless servers
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 
@@ -98,6 +100,55 @@ def get_rh_colormap():
 # Data Loading
 # --------------------------------------------------------------------
 
+def load_single_sample(filename, sample_idx):
+    """
+    Load only one patch (sample_idx) from a patch data file.
+
+    For NetCDF files this reads a single patch via indexed access without
+    loading the full dataset into memory — much faster when files hold
+    thousands of patches.  For pickle files the whole file must be read.
+
+    Returns (data_dict, total_samples).  data_dict values are 2-D arrays
+    (96×96).  Returns (None, total_samples) when sample_idx is out of range.
+    """
+    # Resolve alternate extension if the given path doesn't exist
+    if not os.path.exists(filename):
+        ext_pairs = [('.cPick', '.nc'), ('.nc', '.cPick')]
+        for ext_from, ext_to in ext_pairs:
+            if filename.endswith(ext_from):
+                alt = filename.replace(ext_from, ext_to)
+                if os.path.exists(alt):
+                    print(f"Note: using {os.path.basename(alt)}")
+                    filename = alt
+                break
+        else:
+            print(f"Error: File {filename} not found.")
+            sys.exit(1)
+
+    print(f"Reading file: {filename}")
+
+    _PLOT_KEYS = ['GRAF', 'terrain_diff', 'MRMS', 'MRMS_qual', 'GFS_pwat', 'GFS_r']
+
+    if filename.endswith('.nc'):
+        from netCDF4 import Dataset
+        nc = Dataset(filename, 'r')
+        total = len(nc.dimensions['patch'])
+        if sample_idx >= total:
+            nc.close()
+            return None, total
+        data = {k: np.array(nc.variables[k][sample_idx]) for k in _PLOT_KEYS}
+        nc.close()
+        return data, total
+    else:
+        # Pickle is sequential — must load the whole file
+        from data_loader_utils import load_training_data
+        all_data = load_training_data(filename)
+        total = all_data['GRAF'].shape[0]
+        if sample_idx >= total:
+            return None, total
+        return {k: all_data[k][sample_idx] for k in _PLOT_KEYS}, total
+
+
 def load_patch_file(filename):
     """
     Reads the file created by 'save_patched_GRAF_MRMS_GFS.py'.
@@ -146,39 +197,21 @@ def main():
         print("Error: sample_index must be an integer.")
         sys.exit(1)
 
-    # 1. Load Data
-    data_store = load_patch_file(filename)
+    # 1. Load only the requested sample (NetCDF: single indexed read, not the full file)
+    sample, total_samples = load_single_sample(filename, sample_idx)
 
-    # Validate we have the necessary keys
-    required_keys = ['GRAF', 'terrain_diff', 'MRMS', 'MRMS_qual', 'GFS_pwat', 'GFS_r']
-    for k in required_keys:
-        if k not in data_store:
-            print(f"Error: Key '{k}' missing from pickle file.")
-            sys.exit(1)
-
-    # 2. Extract specific sample
-    total_samples = data_store['GRAF'].shape[0]
-
-    if sample_idx >= total_samples:
+    if sample is None:
         print(f"Error: Index {sample_idx} out of bounds. "
               f"File contains {total_samples} samples.")
         sys.exit(1)
 
-    # Feature 1: Model Forecast (GRAF)
-    precip_fcst = data_store['GRAF'][sample_idx]
-
-    # Feature 2: Terrain Deviations (terrain_diff)
-    terr_dev = data_store['terrain_diff'][sample_idx]
-
-    # Target: Analyzed Precip (MRMS)
-    precip_anal = data_store['MRMS'][sample_idx]
-
-    # Quality: MRMS Data Quality
-    quality_anal = data_store['MRMS_qual'][sample_idx]
-
-    # GFS Features
-    gfs_pwat = data_store['GFS_pwat'][sample_idx]
-    gfs_r = data_store['GFS_r'][sample_idx]
+    # 2. Extract arrays (already 2-D; no second indexing needed)
+    precip_fcst  = sample['GRAF']
+    terr_dev     = sample['terrain_diff']
+    precip_anal  = sample['MRMS']
+    quality_anal = sample['MRMS_qual']
+    gfs_pwat     = sample['GFS_pwat']
+    gfs_r        = sample['GFS_r']
 
     # 3. Set up Plotting - Now with 5 panels in 2 rows
 
@@ -265,7 +298,7 @@ def main():
     base_name = os.path.basename(filename).replace('.cPick', '').replace('.nc', '')
     output_png = f"plot_{base_name}_sample_{sample_idx}.png"
 
-    plt.savefig(output_png, dpi=300, bbox_inches='tight')
+    plt.savefig(output_png, dpi=300)
     print(f"Successfully saved plot to {output_png}")
     plt.close()
 
