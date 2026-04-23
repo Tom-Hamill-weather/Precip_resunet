@@ -2,7 +2,7 @@
 python plot_graf_mrms_gfs_samples.py filename sample_index
 
 Intended to plot samples of patches from train, test, validation data.
-Now includes GFS features: PWAT and column-average relative humidity (r).
+Shows GFS column-average relative humidity (r) as model feature.
 """
 import sys
 import os
@@ -58,25 +58,6 @@ def get_terrain_colormap():
 
     return cmap, norm, levels
 
-def get_pwat_colormap():
-    """
-    Defines colormap for precipitable water (PWAT) in kg/m^2.
-    """
-    # Use a blue-to-green colormap for moisture
-    c_list = ['#f7fbff', '#deebf7', '#c6dbef', '#9ecae1', '#6baed6',
-              '#4292c6', '#2171b5', '#08519c', '#08306b']
-
-    cmap = colors.ListedColormap(c_list)
-
-    # Typical PWAT values range from 0-70 kg/m^2
-    levels = [0, 5, 10, 15, 20, 25, 30, 40, 50, 70]
-
-    cmap.set_over('#08306b')
-
-    norm = colors.BoundaryNorm(levels, cmap.N)
-
-    return cmap, norm, levels
-
 def get_rh_colormap():
     """
     Defines colormap for column-average relative humidity (%).
@@ -127,7 +108,7 @@ def load_single_sample(filename, sample_idx):
 
     print(f"Reading file: {filename}")
 
-    _PLOT_KEYS = ['GRAF', 'terrain_diff', 'MRMS', 'MRMS_qual', 'GFS_pwat', 'GFS_r']
+    _PLOT_KEYS = ['GRAF', 'terrain_diff', 'MRMS', 'MRMS_qual', 'GFS_r']
 
     if filename.endswith('.nc'):
         from netCDF4 import Dataset
@@ -210,25 +191,24 @@ def main():
     terr_dev     = sample['terrain_diff']
     precip_anal  = sample['MRMS']
     quality_anal = sample['MRMS_qual']
-    gfs_pwat     = sample['GFS_pwat']
     gfs_r        = sample['GFS_r']
 
-    # 3. Set up Plotting - Now with 5 panels in 2 rows
+    # 3. Set up Plotting - 3 panels top row, 1 centered panel bottom row
 
     fig = plt.figure(figsize=(18, 10))
 
-    # Create a 2x3 grid, but only use 5 panels
-    gs = fig.add_gridspec(2, 3, hspace=0.3, wspace=0.3)
+    # Top row: 3 equally-spaced panels
+    gs_top = fig.add_gridspec(1, 3, left=0.06, right=0.97, top=0.93, bottom=0.52, wspace=0.35)
+    ax1 = fig.add_subplot(gs_top[0, 0])
+    ax2 = fig.add_subplot(gs_top[0, 1])
+    ax3 = fig.add_subplot(gs_top[0, 2])
 
-    ax1 = fig.add_subplot(gs[0, 0])
-    ax2 = fig.add_subplot(gs[0, 1])
-    ax3 = fig.add_subplot(gs[0, 2])
-    ax4 = fig.add_subplot(gs[1, 0])
-    ax5 = fig.add_subplot(gs[1, 1])
+    # Bottom row: same column geometry, single panel in the centre column
+    gs_bot = fig.add_gridspec(1, 3, left=0.06, right=0.97, top=0.44, bottom=0.05, wspace=0.35)
+    ax5 = fig.add_subplot(gs_bot[0, 1])
 
     cmap_p, norm_p, levs_p = get_precip_colormap()
     cmap_t, norm_t, levs_t = get_terrain_colormap()
-    cmap_pwat, norm_pwat, levs_pwat = get_pwat_colormap()
     cmap_rh, norm_rh, levs_rh = get_rh_colormap()
 
     # --- Panel 1: GRAF Forecast ---
@@ -274,17 +254,7 @@ def main():
                        ticks=levs_p, extend='max')
     cb3.set_label('mm', fontsize=10)
 
-    # --- Panel 4: GFS Precipitable Water (PWAT) ---
-
-    pcm4 = ax4.pcolormesh(gfs_pwat, cmap=cmap_pwat, \
-        norm=norm_pwat, shading='nearest')
-    ax4.set_title(f"Sample {sample_idx}: GFS PWAT (Feature)", fontsize=13)
-    ax4.invert_yaxis()
-    cb4 = fig.colorbar(pcm4, ax=ax4, orientation='vertical', shrink=0.9,
-                       ticks=levs_pwat, extend='max')
-    cb4.set_label('kg m$^{-2}$', fontsize=10)
-
-    # --- Panel 5: GFS Column-Average Relative Humidity ---
+    # --- Panel 4 (bottom centre): GFS Column-Average Relative Humidity ---
 
     pcm5 = ax5.pcolormesh(gfs_r, cmap=cmap_rh, \
         norm=norm_rh, shading='nearest')
