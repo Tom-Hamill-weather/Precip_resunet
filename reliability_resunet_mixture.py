@@ -254,54 +254,48 @@ def read_MRMS(mrms_data_directory, cyyyymmddhh_verif):
 
 # -------------------------------------------------------------------------
 
-def compute_contab_BS(nstns, prob, obs, ncats, threshold, coslat):
+def compute_contab_BS(ny, nx, prob, obs, quality, ncats, threshold):
     """
-    VECTORIZED VERSION: Compute contingency table and Brier Score.
-    Returns fmean_sum and fmean_count (instead of fmean) so callers
-    can accumulate across multiple cases before computing the mean.
+    Compute contingency table and Brier Score for one case day.
+    Operates on full 2D arrays; handles quality masking internally.
+    Call once per case day per threshold; accumulate returned values
+    into running totals outside.
     """
 
-    contab = np.zeros((ncats, 2), dtype=float)
-    fmean_sum = np.zeros((ncats), dtype=float)
-    fmean_count = np.zeros((ncats), dtype=float)
+    contab = np.zeros((ncats, 2), dtype=int)
 
-    # Convert observations to binary
-    binary_obs = (obs >= threshold).astype(int)
+    # Assign binary_obs: 1=event, 0=non-event, -1=masked (bad quality)
+    binary_obs = -1 * np.ones((ny, nx), dtype=int)
 
-    # Define probability bin edges
-    # For ncats=11, bins are: [0, 0.05, 0.15, ..., 0.95, 1.0]
-    bin_edges = np.linspace(0, 1, ncats)
-    bin_width = 1.0 / (ncats - 1)
-    bin_edges = bin_edges - bin_width / 2.0
-    bin_edges[0] = 0.0
-    bin_edges[-1] = 1.0
+    a = np.where(np.logical_and(quality > 0.5,
+        np.logical_and(obs >= threshold, obs <= 200.0)))
+    binary_obs[a] = 1
 
-    # Assign each probability to a bin (vectorized!)
-    # Returns indices 0 to ncats-1
-    bins = np.digitize(prob, bin_edges) - 1
-    bins = np.clip(bins, 0, ncats - 1)
+    a = np.where(np.logical_and(quality > 0.5,
+        np.logical_and(obs >= 0.0,
+        np.logical_and(obs < threshold, obs <= 200.0))))
+    binary_obs[a] = 0
 
-    # Compute contingency table using vectorized operations
+    # Accumulate contingency table counts per probability bin
     for icat in range(ncats):
-        mask = (bins == icat)
-        if np.any(mask):
-            # Accumulate sum and count for mean forecast probability
-            fmean_sum[icat] = np.sum(prob[mask])
-            fmean_count[icat] = np.sum(mask)
+        pmin = np.max([0.0, float(icat) / (ncats-1) - 1./(2*(ncats-1))])
+        pmax = np.min([1.0, float(icat) / (ncats-1) + 1./(2*(ncats-1))])
+        in_bin = np.logical_and(prob >= pmin,
+            prob <= pmax if icat == ncats-1 else prob < pmax)
 
-            # Count events and non-events weighted by coslat
-            event_mask = mask & (binary_obs == 1)
-            non_event_mask = mask & (binary_obs == 0)
+        a = np.where(np.logical_and(in_bin, binary_obs == 1))
+        contab[icat, 1] += len(a[0])
 
-            contab[icat, 1] = np.sum(coslat[event_mask])
-            contab[icat, 0] = np.sum(coslat[non_event_mask])
+        a = np.where(np.logical_and(in_bin, binary_obs == 0))
+        contab[icat, 0] += len(a[0])
 
-    # Compute Brier Score (vectorized)
-    BS_terms = coslat * ((prob - binary_obs) ** 2)
-    BS = np.sum(BS_terms)
-    nsamps = np.sum(coslat)
+    # Brier Score over quality-masked pixels
+    good_0 = np.where(binary_obs == 0)
+    good_1 = np.where(binary_obs == 1)
+    BS = float(np.sum(prob[good_0]**2) + np.sum((1.0 - prob[good_1])**2))
+    nsamps = len(good_0[0]) + len(good_1[0])
 
-    return contab, BS, nsamps, fmean_sum, fmean_count
+    return contab, BS, nsamps
 
 # --------------------------------------------------------
 
@@ -316,14 +310,12 @@ def compute_relia(contab, ncats):
     relia = np.zeros((ncats), dtype=float)
     nsamps_total = np.sum(contab)
     for icat in range(ncats):
-        if np.sum(contab[icat,:]) > 100:
+        frequse[icat] = np.sum(contab[icat,:]) / float(nsamps_total)
+        if np.sum(contab[icat,:]) > 5:
             relia[icat] = \
                 float(contab[icat,1]) / np.sum(contab[icat,:])
-            frequse[icat] = \
-                np.sum(contab[icat,:]) / float(nsamps_total)
         else:
             relia[icat] = -99.99
-            frequse[icat] = -99.99
     return frequse, relia
 
 # --------------------------------------------------------
@@ -359,19 +351,15 @@ GRAFdatadir_conus, GRAFprobsdir_conus, \
 
 # ---- Declare running-sum accumulators
 
-contab_raw = np.zeros((nthresholds, ncats, 2), dtype=float)
+contab_raw = np.zeros((nthresholds, ncats, 2), dtype=int)
 BS_raw = np.zeros((nthresholds), dtype=float)
 nsamps_raw = np.zeros((nthresholds), dtype=float)
-fmean_raw_sum = np.zeros((nthresholds, ncats), dtype=float)
-fmean_raw_count = np.zeros((nthresholds, ncats), dtype=float)
 
-contab_gamma = np.zeros((nthresholds, ncats, 2), dtype=float)
+contab_gamma = np.zeros((nthresholds, ncats, 2), dtype=int)
 BS_gamma = np.zeros((nthresholds), dtype=float)
 nsamps_gamma = np.zeros((nthresholds), dtype=float)
-fmean_gamma_sum = np.zeros((nthresholds, ncats), dtype=float)
-fmean_gamma_count = np.zeros((nthresholds, ncats), dtype=float)
 
-# --- loop over dates, accumulating contingency table and BS data
+# --- Loop over dates, accumulating contingency table and BS data
 
 lats_save = None
 lons_save = None
@@ -399,40 +387,22 @@ for idate, date in enumerate(cyyyymmddhh_list):
         continue
 
     ngood += 1
-
-    # Cosine-latitude weights for this date
-    coslat = np.cos(lat * 3.1415926 / 180.)
-
-    # Quality mask: valid precip range and sufficient data quality
-    quality_mask = (MRMS_precip >= 0.0) & \
-                   (MRMS_quality >= 0.5) & \
-                   (MRMS_precip < 100.0)
-
-    observations = MRMS_precip[quality_mask]
-    coslat_flat = coslat[quality_mask]
-    nobs = len(observations)
-    print (f'  Valid observations: {nobs:,}')
+    ny, nx = MRMS_precip.shape
 
     # ---- Accumulate contingency table and BS for each threshold
     for ithresh, thresh in enumerate(pthresholds):
 
-        prob_forecast_raw = probs[thresh]['raw'][quality_mask]
-        ctab, bs, ns, fm_sum, fm_count = compute_contab_BS(
-            nobs, prob_forecast_raw, observations, ncats, thresh, coslat_flat)
+        ctab, bs, ns = compute_contab_BS(ny, nx,
+            probs[thresh]['raw'], MRMS_precip, MRMS_quality, ncats, thresh)
         contab_raw[ithresh] += ctab
         BS_raw[ithresh] += bs
         nsamps_raw[ithresh] += ns
-        fmean_raw_sum[ithresh] += fm_sum
-        fmean_raw_count[ithresh] += fm_count
 
-        prob_forecast_gamma = probs[thresh]['gamma'][quality_mask]
-        ctab, bs, ns, fm_sum, fm_count = compute_contab_BS(
-            nobs, prob_forecast_gamma, observations, ncats, thresh, coslat_flat)
+        ctab, bs, ns = compute_contab_BS(ny, nx,
+            probs[thresh]['gamma'], MRMS_precip, MRMS_quality, ncats, thresh)
         contab_gamma[ithresh] += ctab
         BS_gamma[ithresh] += bs
         nsamps_gamma[ithresh] += ns
-        fmean_gamma_sum[ithresh] += fm_sum
-        fmean_gamma_count[ithresh] += fm_count
 
 # ---- Check that we have usable data
 
@@ -447,24 +417,17 @@ print(f"\n Found {ngood} dates with complete data out of {ndates} total dates")
 
 # ---- Compute reliability, frequency of usage, and Brier score per threshold
 
+# Bin centers used as x-axis for reliability diagram
+probability = np.arange(ncats) * 100. / float(ncats - 1)
+
 for ithresh, thresh in enumerate(pthresholds):
 
     print ('Processing threshold = ', thresh)
 
-    # Compute mean forecast probability per bin from accumulated sums
-    fmean_raw = np.where(fmean_raw_count[ithresh] > 0,
-                         fmean_raw_sum[ithresh] / fmean_raw_count[ithresh],
-                         0.0)
-    fmean_gamma = np.where(fmean_gamma_count[ithresh] > 0,
-                           fmean_gamma_sum[ithresh] / fmean_gamma_count[ithresh],
-                           0.0)
-    print ('fmean raw: ', fmean_raw)
-    print ('fmean gamma mixture: ', fmean_gamma)
-
     frequse_raw, relia_raw = compute_relia(contab_raw[ithresh,:,:], ncats)
     BS_raw[ithresh] = BS_raw[ithresh] / float(nsamps_raw[ithresh])
 
-    frequse_gamma, relia_gamma = compute_relia(
+    frequse_gamma, relia_gamma = compute_relia(\
         contab_gamma[ithresh,:,:], ncats)
     BS_gamma[ithresh] = BS_gamma[ithresh] / \
         float(nsamps_gamma[ithresh])
@@ -474,7 +437,6 @@ for ithresh, thresh in enumerate(pthresholds):
 
     # ----- Make plots of 6-h reliability and frequency of usage
 
-    probability = np.arange(11) * 100. / np.real(10.)
     cleadb = str(int(clead)-6)
     ctitle = clead+'-h forecast reliability, '+\
         cthresh  #+'\n'+ cyyyymmddhh_list[0] + ' to ' + \
@@ -497,7 +459,6 @@ for ithresh, thresh in enumerate(pthresholds):
             a1.set_ylim(-1,101)
             a1.set_xlim(-1,101)
             relia = relia_raw
-            prob_adjusted = fmean_raw
             f = frequse_raw
             cbs = "%0.5f"%(BS_raw[ithresh])
             label='Smoothed GRAF raw probability, BS = '+cbs
@@ -505,14 +466,12 @@ for ithresh, thresh in enumerate(pthresholds):
         elif imodel == 1:
             relia = relia_gamma
             f = frequse_gamma
-            prob_adjusted = fmean_gamma
             cbs = "%0.5f"%(BS_gamma[ithresh])
             label='Fitted Gamma mixture probability, BS = '+cbs
             color='RoyalBlue'
 
-        relia_ma = ma.masked_where(f < 1.e-4, relia)
-        prob_adjusted_ma = ma.masked_where(f < 1.e-4, prob_adjusted)
-        a1.plot(100.*prob_adjusted_ma, 100.*relia_ma, 'o-',\
+        relia_ma = ma.masked_where(relia < -99., relia)
+        a1.plot(probability, 100.*relia_ma, 'o-',\
             color=color,linewidth=2,label=label)
 
         # --- Frequency of usage inset diagram
