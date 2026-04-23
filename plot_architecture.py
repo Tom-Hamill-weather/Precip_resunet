@@ -12,19 +12,20 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import FancyBboxPatch, Circle
 
 # ─── Layout ───────────────────────────────────────────────────────────────────
-FW, FH = 22, 14
-BG     = '#ECEFF1'
+FW, FH   = 26, 17
+BG       = '#ECEFF1'
 
-X_ENC    = 3.5
-X_BRIDGE = 11.0
-X_DEC    = 18.5
-BW       = 5.0    # encoder / decoder block width
-BW_B     = 4.5    # bridge block width
-BH       = 0.85   # block height
+X_ENC    = 3.5          # encoder column centre-x
+X_BRIDGE = 11.5         # bridge centre-x
+X_DEC    = 19.5         # decoder column centre-x
+BW       = 5.0          # encoder / decoder block width
+BW_B     = 5.0          # bridge block width
+BH       = 1.5          # encoder / decoder block height
+BH_IO    = 1.8          # input / output block height
 
-Y_TOP    = 13.3   # y for input / output blocks
-Y_LEV    = [11.8, 10.0, 8.2, 6.4]  # levels 0–3 (shared by enc and dec)
-Y_BRIDGE = 4.4
+Y_TOP    = 15.2         # centre-y of input and output blocks
+Y_LEV    = [13.0, 11.0, 9.0, 7.0]   # U-Net resolution levels 0–3
+Y_BRIDGE = 4.5
 
 # ─── Colours ──────────────────────────────────────────────────────────────────
 C_IN   = '#00695C'
@@ -46,20 +47,22 @@ ax.set_facecolor(BG)
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def box(cx, cy, label, sub='', color=C_ENC, w=BW, h=BH, fs=8.5, sfs=6.9):
+def box(cx, cy, label, sub='', color=C_ENC, w=BW, h=BH, fs=15, sfs=12):
+    """Rounded rectangle; sub may contain \\n for line-wrapping."""
     r = FancyBboxPatch((cx - w/2, cy - h/2), w, h,
                         boxstyle='round,pad=0.07',
-                        fc=color, ec='white', lw=1.8, zorder=3)
+                        fc=color, ec='white', lw=2.0, zorder=3)
     ax.add_patch(r)
-    y0 = cy + (0.12 if sub else 0)
-    ax.text(cx, y0, label, ha='center', va='center',
+    y_lbl = cy + (0.27 if sub else 0)
+    ax.text(cx, y_lbl, label, ha='center', va='center',
             fontsize=fs, color='white', fontweight='bold', zorder=4)
     if sub:
-        ax.text(cx, cy - 0.20, sub, ha='center', va='center',
-                fontsize=sfs, color='#BDBDBD', zorder=4)
+        ax.text(cx, cy - 0.28, sub, ha='center', va='center',
+                fontsize=sfs, color='#BDBDBD', zorder=4,
+                multialignment='center')
 
 
-def arr(x1, y1, x2, y2, color=C_ARR, lw=1.6):
+def arr(x1, y1, x2, y2, color=C_ARR, lw=1.8):
     ax.annotate('', xy=(x2, y2), xytext=(x1, y1),
                 arrowprops=dict(arrowstyle='->', color=color, lw=lw,
                                 connectionstyle='arc3,rad=0.0'), zorder=5)
@@ -70,205 +73,201 @@ def skip(y_lev):
     xe = X_ENC + BW / 2
     xd = X_DEC - BW / 2
     xm = (xe + xd) / 2
-    ax.plot([xe, xm - 0.35], [y_lev, y_lev],
-            color=C_SKIP, lw=1.5, ls='--', zorder=2)
-    circ = Circle((xm, y_lev), 0.30, fc=C_ATTN, ec='white', lw=1.5, zorder=6)
+    ax.plot([xe, xm - 0.48], [y_lev, y_lev],
+            color=C_SKIP, lw=1.8, ls='--', zorder=2)
+    circ = Circle((xm, y_lev), 0.42, fc=C_ATTN, ec='white', lw=1.8, zorder=6)
     ax.add_patch(circ)
     ax.text(xm, y_lev, 'A', ha='center', va='center',
-            fontsize=8, color='white', fontweight='bold', zorder=7)
-    arr(xm + 0.35, y_lev, xd, y_lev, color=C_SKIP, lw=1.5)
+            fontsize=14, color='white', fontweight='bold', zorder=7)
+    arr(xm + 0.48, y_lev, xd, y_lev, color=C_SKIP, lw=1.8)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
 # Title
-# ═══════════════════════════════════════════════════════════════════════════════
-ax.text(FW / 2, FH - 0.2,
+# ══════════════════════════════════════════════════════════════════════════════
+ax.text(FW / 2, FH - 0.22,
         'Attention Residual U-Net  ·  2-Component Gamma Mixture Precipitation Model',
-        ha='center', va='top', fontsize=13, fontweight='bold', color='#263238')
+        ha='center', va='top', fontsize=23, fontweight='bold', color='#263238')
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Input
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# Input block
+# ══════════════════════════════════════════════════════════════════════════════
 box(X_ENC, Y_TOP, 'Input   7 × 96 × 96',
-    '① GRAF  ② terrain  ③ GFS-RH  ④ GRAF×terrain  ⑤ GRAF×RH  ⑥ ∂/∂lon  ⑦ ∂/∂lat',
-    color=C_IN, w=BW + 0.4, fs=9, sfs=7.0)
-arr(X_ENC, Y_TOP - BH / 2, X_ENC, Y_LEV[0] + BH / 2)
+    '① GRAF   ② terrain   ③ GFS-RH   ④ GRAF×terrain\n⑤ GRAF×RH   ⑥ ∂/∂lon   ⑦ ∂/∂lat',
+    color=C_IN, w=BW + 0.5, h=BH_IO, fs=16, sfs=13)
+arr(X_ENC, Y_TOP - BH_IO/2, X_ENC, Y_LEV[0] + BH/2)
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Encoder
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# Encoder column
+# ══════════════════════════════════════════════════════════════════════════════
 enc = [
     ('inc',   '96 × 96 · 64 ch',  'ResBlock  7 → 64'),
-    ('down1', '48 × 48 · 128 ch', 'MaxPool  →  ResBlock  64 → 128'),
-    ('down2', '24 × 24 · 256 ch', 'MaxPool  →  ResBlock  128 → 256'),
-    ('down3', '12 × 12 · 512 ch', 'MaxPool  →  ResBlock  256 → 512'),
+    ('down1', '48 × 48 · 128 ch', 'MaxPool  →  ResBlock\n64 → 128'),
+    ('down2', '24 × 24 · 256 ch', 'MaxPool  →  ResBlock\n128 → 256'),
+    ('down3', '12 × 12 · 512 ch', 'MaxPool  →  ResBlock\n256 → 512'),
 ]
 for i, (name, dims, detail) in enumerate(enc):
     box(X_ENC, Y_LEV[i], f'{name}:  {dims}', detail, color=C_ENC)
     if i < 3:
-        arr(X_ENC, Y_LEV[i] - BH / 2, X_ENC, Y_LEV[i + 1] + BH / 2)
+        arr(X_ENC, Y_LEV[i] - BH/2, X_ENC, Y_LEV[i+1] + BH/2)
 
-# Enc bottom → Bridge (diagonal)
-arr(X_ENC, Y_LEV[3] - BH / 2, X_BRIDGE - BW_B / 2, Y_BRIDGE)
+# Enc[3] bottom → Bridge left (diagonal)
+arr(X_ENC, Y_LEV[3] - BH/2, X_BRIDGE - BW_B/2, Y_BRIDGE)
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
 # Bridge
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
 box(X_BRIDGE, Y_BRIDGE,
     'Bridge:  6 × 6 · 1024 ch',
     'MaxPool  →  ResBlock  512 → 1024',
-    color=C_BRDG, w=BW_B)
+    color=C_BRDG, w=BW_B, h=BH)
 
-# Bridge → Dec bottom (diagonal)
-arr(X_BRIDGE + BW_B / 2, Y_BRIDGE, X_DEC, Y_LEV[3] - BH / 2)
+# Bridge right → Dec[0] bottom (diagonal)
+arr(X_BRIDGE + BW_B/2, Y_BRIDGE, X_DEC, Y_LEV[3] - BH/2)
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Decoder  (up1 at level 3, up4 at level 0)
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# Decoder column  (up1 at level 3, up4 at level 0)
+# ══════════════════════════════════════════════════════════════════════════════
 dec = [
-    ('up1', '12 × 12 · 512 ch', 'ConvTranspose  →  cat  →  ResBlock  1024 → 512'),
-    ('up2', '24 × 24 · 256 ch', 'ConvTranspose  →  cat  →  ResBlock   512 → 256'),
-    ('up3', '48 × 48 · 128 ch', 'ConvTranspose  →  cat  →  ResBlock   256 → 128'),
-    ('up4', '96 × 96 ·  64 ch', 'ConvTranspose  →  cat  →  ResBlock   128 →  64'),
+    ('up1', '12 × 12 · 512 ch', 'ConvTranspose  →  cat\n→  ResBlock  1024 → 512'),
+    ('up2', '24 × 24 · 256 ch', 'ConvTranspose  →  cat\n→  ResBlock  512 → 256'),
+    ('up3', '48 × 48 · 128 ch', 'ConvTranspose  →  cat\n→  ResBlock  256 → 128'),
+    ('up4', '96 × 96 ·  64 ch', 'ConvTranspose  →  cat\n→  ResBlock  128 → 64'),
 ]
 for i, (name, dims, detail) in enumerate(dec):
     y = Y_LEV[3 - i]
     box(X_DEC, y, f'{name}:  {dims}', detail, color=C_DEC)
     if i < 3:
-        arr(X_DEC, Y_LEV[3 - i] + BH / 2, X_DEC, Y_LEV[3 - i - 1] - BH / 2)
+        arr(X_DEC, Y_LEV[3-i] + BH/2, X_DEC, Y_LEV[3-i-1] - BH/2)
 
-# Dec top → Output block
-arr(X_DEC, Y_LEV[0] + BH / 2, X_DEC, Y_TOP - BH / 2)
+# Dec[0] top → Output block
+arr(X_DEC, Y_LEV[0] + BH/2, X_DEC, Y_TOP - BH_IO/2)
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Skip connections + Attention Gates
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# Skip connections with Attention Gates
+# ══════════════════════════════════════════════════════════════════════════════
 for y in Y_LEV:
     skip(y)
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
 # Output block
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
 box(X_DEC, Y_TOP,
     'outc:  96 × 96 · 6 ch  (raw logits)',
     'Conv 1×1   64 → 6',
-    color=C_OUT, w=BW + 0.4, fs=9, sfs=7.2)
+    color=C_OUT, w=BW + 0.5, h=BH_IO, fs=16, sfs=13)
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Per-pixel output parameters  (bottom-right block)
-# ═══════════════════════════════════════════════════════════════════════════════
-px, py_top = 13.6, 3.75
-pw, ph_gap = 8.0, 0.54
-ph_row = 0.44
+# ══════════════════════════════════════════════════════════════════════════════
+# Per-pixel output parameters  (right margin, same y range as output block)
+# ══════════════════════════════════════════════════════════════════════════════
+px      = X_DEC + (BW + 0.5)/2 + 0.38    # left edge of param boxes
+pw      = FW - 0.20 - px                  # width of param boxes
+ph      = 0.92                             # height of each param box
+pg      = 1.12                             # centre-to-centre gap
+py_top  = Y_TOP                            # first param box aligned with output block
 
-ax.text(px + pw / 2, py_top + 0.20,
-        'Per-pixel outputs  (6 channels, applied per pixel)',
-        ha='center', va='bottom', fontsize=9, fontweight='bold', color='#263238')
+ax.text(px + pw/2, py_top + ph/2 + 0.40,
+        'Per-pixel outputs  (6 per pixel)',
+        ha='center', va='bottom', fontsize=16, fontweight='bold', color='#263238')
 
 params = [
-    ('①  p₀',      'fraction_zero',          'sigmoid( logit[0] )'),
-    ('②  w',        'mixing weight',           'sigmoid( logit[1] )'),
-    ('③  α₁',       'shape₁  (light comp.)',   'shape_min + softplus( logit[2] )'),
-    ('④  θ₁',       'scale₁  (light comp.)',   'scale_min + softplus( logit[3] )'),
-    ('⑤  α₂',       'shape₂  (heavy comp.)',   'α₁ + softplus( logit[4] ) + 0.5   [hard ordering]'),
-    ('⑥  θ₂',       'scale₂  (heavy comp.)',   'scale_min + softplus( logit[5] )'),
+    ('①  p₀',    'fraction_zero',   'sigmoid( logit[0] )'),
+    ('②  w',      'mixing weight',   'sigmoid( logit[1] )'),
+    ('③  α₁',     'shape₁  (light)', 'shape_min + softplus( logit[2] )'),
+    ('④  θ₁',     'scale₁  (light)', 'scale_min + softplus( logit[3] )'),
+    ('⑤  α₂',     'shape₂  (heavy)', 'α₁ + softplus( logit[4] ) + 0.5\n[hard ordering constraint]'),
+    ('⑥  θ₂',     'scale₂  (heavy)', 'scale_min + softplus( logit[5] )'),
 ]
 for j, (sym, name, act) in enumerate(params):
-    yj = py_top - j * ph_gap
-    r = FancyBboxPatch((px, yj - ph_row / 2), pw, ph_row,
-                        boxstyle='round,pad=0.04',
-                        fc=C_OUT, ec='white', lw=1.2, alpha=0.88, zorder=3)
+    yj = py_top - j * pg
+    r = FancyBboxPatch((px, yj - ph/2), pw, ph,
+                        boxstyle='round,pad=0.05',
+                        fc=C_OUT, ec='white', lw=1.4, alpha=0.90, zorder=3)
     ax.add_patch(r)
-    ax.text(px + 0.18, yj + 0.06, f'{sym}:  {name}',
-            ha='left', va='center', fontsize=7.8, color='white',
+    ax.text(px + 0.20, yj + 0.18, f'{sym}:  {name}',
+            ha='left', va='center', fontsize=14, color='white',
             fontweight='bold', zorder=4)
-    ax.text(px + 0.18, yj - 0.12, act,
-            ha='left', va='center', fontsize=6.8, color='#FFCDD2', zorder=4)
+    ax.text(px + 0.20, yj - 0.18, act,
+            ha='left', va='center', fontsize=12, color='#FFCDD2', zorder=4,
+            multialignment='left')
 
-# Arrow from output block down to parameter list
-ax.annotate('', xy=(X_DEC, py_top + 0.22),
-            xytext=(X_DEC, Y_TOP - BH / 2 - 0.05),
-            arrowprops=dict(arrowstyle='->', color=C_OUT, lw=1.5,
-                            connectionstyle='arc3,rad=0.0'), zorder=5)
+# Horizontal arrow from output block right edge to param list
+arr(X_DEC + (BW+0.5)/2, Y_TOP, px - 0.05, Y_TOP, color=C_OUT, lw=2.0)
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# ResidualBlock inset  (bottom-left)
-# ═══════════════════════════════════════════════════════════════════════════════
-ri_x, ri_y = 0.4, 3.6
-ri_w, ri_h = 3.4, 0.44
-ri_gap = 0.64
-ax.text(ri_x + ri_w / 2, ri_y + 0.55, 'ResidualBlock',
-        ha='center', fontsize=8.5, fontweight='bold', color='#263238')
+# ══════════════════════════════════════════════════════════════════════════════
+# ResidualBlock inset  (bottom-left, clear of bridge)
+# ══════════════════════════════════════════════════════════════════════════════
+ri_x, ri_y = 0.5, 4.7
+ri_w, ri_h, ri_gap = 4.6, 0.72, 1.12
 
+ax.text(ri_x + ri_w/2, ri_y + 0.65, 'ResidualBlock',
+        ha='center', fontsize=15, fontweight='bold', color='#263238')
 layers = ['Conv3×3 – BN – ReLU', 'Conv3×3 – BN']
 for k, lbl in enumerate(layers):
     yk = ri_y - k * ri_gap
-    r = FancyBboxPatch((ri_x, yk - ri_h / 2), ri_w, ri_h,
-                        boxstyle='round,pad=0.04',
-                        fc=C_ENC, ec='white', lw=1.2, zorder=3)
+    r = FancyBboxPatch((ri_x, yk - ri_h/2), ri_w, ri_h,
+                        boxstyle='round,pad=0.05',
+                        fc=C_ENC, ec='white', lw=1.5, zorder=3)
     ax.add_patch(r)
-    ax.text(ri_x + ri_w / 2, yk, lbl, ha='center', va='center',
-            fontsize=7, color='white', zorder=4)
+    ax.text(ri_x + ri_w/2, yk, lbl, ha='center', va='center',
+            fontsize=13, color='white', zorder=4)
     if k == 0:
-        arr(ri_x + ri_w / 2, yk - ri_h / 2,
-            ri_x + ri_w / 2, yk - ri_gap + ri_h / 2, lw=1.2)
+        arr(ri_x + ri_w/2, yk - ri_h/2,
+            ri_x + ri_w/2, yk - ri_gap + ri_h/2, lw=1.4)
 
-# Add + ReLU
-yr = ri_y - 2 * ri_gap
-r = FancyBboxPatch((ri_x, yr - ri_h / 2), ri_w, ri_h,
-                    boxstyle='round,pad=0.04',
-                    fc='#455A64', ec='white', lw=1.2, zorder=3)
+yr_add = ri_y - 2 * ri_gap
+r = FancyBboxPatch((ri_x, yr_add - ri_h/2), ri_w, ri_h,
+                    boxstyle='round,pad=0.05',
+                    fc='#455A64', ec='white', lw=1.5, zorder=3)
 ax.add_patch(r)
-ax.text(ri_x + ri_w / 2, yr, 'Add + ReLU', ha='center', va='center',
-        fontsize=7, color='white', zorder=4)
-arr(ri_x + ri_w / 2, ri_y - ri_gap - ri_h / 2, ri_x + ri_w / 2, yr + ri_h / 2, lw=1.2)
+ax.text(ri_x + ri_w/2, yr_add, 'Add + ReLU', ha='center', va='center',
+        fontsize=13, color='white', zorder=4)
+arr(ri_x + ri_w/2, ri_y - ri_gap - ri_h/2,
+    ri_x + ri_w/2, yr_add + ri_h/2, lw=1.4)
 
-# Shortcut arrow (right side, curved)
-ax.annotate('', xy=(ri_x + ri_w + 0.12, yr + ri_h / 2 + 0.04),
-            xytext=(ri_x + ri_w + 0.12, ri_y + ri_h / 2),
-            arrowprops=dict(arrowstyle='->', color=C_ENC, lw=1.5,
+# Shortcut (residual) arrow on right side
+ax.annotate('', xy=(ri_x + ri_w + 0.15, yr_add + ri_h/2 + 0.05),
+            xytext=(ri_x + ri_w + 0.15, ri_y + ri_h/2),
+            arrowprops=dict(arrowstyle='->', color=C_ENC, lw=2.0,
                             connectionstyle='arc3,rad=-0.35'), zorder=5)
-ax.text(ri_x + ri_w + 0.62, (ri_y + yr) / 2, 'shortcut',
-        va='center', ha='center', fontsize=6.5, color=C_ENC, rotation=270)
+ax.text(ri_x + ri_w + 0.82, (ri_y + yr_add)/2, 'shortcut',
+        va='center', ha='center', fontsize=12, color=C_ENC, rotation=270)
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# AttentionGate inset  (bottom-centre)
-# ═══════════════════════════════════════════════════════════════════════════════
-ai_x, ai_y = 4.5, 3.6
-ai_w, ai_h = 4.5, 0.44
-ai_gap = 0.62
-ax.text(ai_x + ai_w / 2, ai_y + 0.55, 'AttentionGate',
-        ha='center', fontsize=8.5, fontweight='bold', color='#263238')
+# ══════════════════════════════════════════════════════════════════════════════
+# AttentionGate inset  (bottom-right of bridge, clear of diagonal arrows)
+# ══════════════════════════════════════════════════════════════════════════════
+ai_x, ai_y = 16.5, 4.7
+ai_w, ai_h, ai_gap = 6.5, 0.72, 1.12
 
+ax.text(ai_x + ai_w/2, ai_y + 0.65, 'AttentionGate',
+        ha='center', fontsize=15, fontweight='bold', color='#263238')
 att_steps = [
     'g′ = BN( Conv1×1( g ) )',
     'x′ = BN( Conv1×1( x ) )',
-    'ψ  = Sigmoid( BN( Conv1×1( ReLU(g′ + x′) ) ) )',
+    'ψ  = Sigmoid( BN( Conv1×1( ReLU( g′ + x′ ) ) ) )',
     'output = x  ×  ψ',
 ]
 for k, lbl in enumerate(att_steps):
     yk = ai_y - k * ai_gap
-    r = FancyBboxPatch((ai_x, yk - ai_h / 2), ai_w, ai_h,
-                        boxstyle='round,pad=0.04',
-                        fc=C_ATTN, ec='white', lw=1.2, alpha=0.90, zorder=3)
+    r = FancyBboxPatch((ai_x, yk - ai_h/2), ai_w, ai_h,
+                        boxstyle='round,pad=0.05',
+                        fc=C_ATTN, ec='white', lw=1.5, alpha=0.92, zorder=3)
     ax.add_patch(r)
-    ax.text(ai_x + 0.15, yk, lbl, ha='left', va='center',
-            fontsize=6.8, color='white', zorder=4)
+    ax.text(ai_x + 0.20, yk, lbl, ha='left', va='center',
+            fontsize=12, color='white', zorder=4)
     if k < len(att_steps) - 1:
-        arr(ai_x + ai_w / 2, yk - ai_h / 2,
-            ai_x + ai_w / 2, yk - ai_gap + ai_h / 2, lw=1.1)
+        arr(ai_x + ai_w/2, yk - ai_h/2,
+            ai_x + ai_w/2, yk - ai_gap + ai_h/2, lw=1.3)
 
-# Input labels for attention gate inset
-ax.text(ai_x - 0.12, ai_y,
-        'g = decoder\n(upsampled)', ha='right', va='center',
-        fontsize=6.5, color='#546E7A', style='italic')
-ax.text(ai_x - 0.12, ai_y - ai_gap,
-        'x = encoder\nskip', ha='right', va='center',
-        fontsize=6.5, color='#546E7A', style='italic')
+# Input labels
+ax.text(ai_x - 0.18, ai_y, 'g =\ndecoder\nupsampled',
+        ha='right', va='center', fontsize=12, color='#546E7A', style='italic')
+ax.text(ai_x - 0.18, ai_y - ai_gap, 'x =\nencoder\nskip',
+        ha='right', va='center', fontsize=12, color='#546E7A', style='italic')
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Legend  (bottom strip)
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# Legend
+# ══════════════════════════════════════════════════════════════════════════════
 legend = [
     (C_ENC,  'Encoder block'),
     (C_BRDG, 'Bridge'),
@@ -277,17 +276,17 @@ legend = [
     (C_IN,   'Input'),
     (C_OUT,  'Output / params'),
 ]
-xl, yl = 0.4, 0.42
+xl, yl = 0.4, 0.50
 for k, (col, lbl) in enumerate(legend):
-    xk = xl + k * 3.55
-    circ = Circle((xk + 0.18, yl), 0.16, fc=col, ec='white', lw=1.0, zorder=4)
+    xk = xl + k * 4.25
+    circ = Circle((xk + 0.22, yl), 0.20, fc=col, ec='white', lw=1.2, zorder=4)
     ax.add_patch(circ)
-    ax.text(xk + 0.44, yl, lbl, va='center', fontsize=7.5, color='#263238')
+    ax.text(xk + 0.55, yl, lbl, va='center', fontsize=14, color='#263238')
 
-# Skip connection legend entry
-ax.plot([0.4, 0.85], [0.12, 0.12], color=C_SKIP, lw=1.5, ls='--')
-ax.text(0.97, 0.12, '  dashed = skip connection  (attended by A, then concatenated)',
-        va='center', fontsize=7.5, color='#263238')
+ax.plot([0.4, 0.92], [0.15, 0.15], color=C_SKIP, lw=1.8, ls='--')
+ax.text(1.05, 0.15,
+        'dashed = skip connection  (attended by  A,  then concatenated with upsampled features)',
+        va='center', fontsize=13, color='#263238')
 
 plt.tight_layout(pad=0.1)
 plt.savefig('architecture_diagram.png', dpi=200, bbox_inches='tight')
