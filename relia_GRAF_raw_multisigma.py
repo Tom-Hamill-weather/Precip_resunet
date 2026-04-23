@@ -241,8 +241,11 @@ if os.path.exists(cache_file):
     contab_raw_sigmas = cache['contab_raw_sigmas']
     BS_raw_sigmas = cache['BS_raw_sigmas']
     nsamps_sigmas = cache['nsamps_sigmas']
-    cache_loaded = True
-    print('Cache loaded; skipping date loop.')
+    if np.sum(nsamps_sigmas) > 0:
+        cache_loaded = True
+        print('Cache loaded; skipping date loop.')
+    else:
+        print('Cache file exists but contains no data; recomputing.')
 
 if not cache_loaded:
 
