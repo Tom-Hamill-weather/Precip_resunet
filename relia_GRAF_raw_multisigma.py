@@ -209,8 +209,8 @@ nsigmas = len(sigmas)
 
 cmonths = ['Jan','Feb','Mar','Apr','May','Jun','Jul',\
     'Aug','Sep','Oct','Nov','Dec']
-cyyyymmddhh_list = daterange(cyyyymmddhh_begin, \
-    cyyyymmddhh_end, 24)
+cyyyymmddhh_list = [d for d in daterange(cyyyymmddhh_begin,
+    cyyyymmddhh_end, 6) if int(d[8:10]) in [0, 6, 12, 18]]
 
 # --- config file read for directory names.
 
