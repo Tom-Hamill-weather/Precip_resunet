@@ -55,6 +55,7 @@ Optimized by Claude Code, Feb 2026
 """
 
 from configparser import ConfigParser
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import os, sys
 import glob
@@ -62,6 +63,7 @@ import re
 from dateutils import daterange, dateshift
 import torch
 import torch.nn.functional as F
+from torch.distributions import Gamma
 from pytorch_train_resunet_gamma_mixture import AttnResUNet
 from netCDF4 import Dataset
 import scipy.ndimage as ndimage
@@ -164,17 +166,9 @@ def define_manhattan(N):
     Linear falloff from center to edges prevents discontinuities.
     Returns as torch tensor on GPU for faster operations.
     """
-    ilocs = np.arange(N)
-    jlocs = np.copy(ilocs)
-    manhattan = np.zeros((N,N), dtype=np.float32)
-    for j in jlocs:
-        wj = np.max([0.0, 1. - 2.*np.abs(j+0.5-N/2)/N])
-        for i in ilocs:
-            wi = np.max([0.0, 1. - 2.*np.abs(i+0.5-N/2)/N])
-            manhattan[j,i] = 0.5*wj*wi
-
-    # Convert to torch tensor on device
-    return torch.from_numpy(manhattan).float().to(DEVICE)
+    w = np.maximum(0.0, 1. - 2. * np.abs(np.arange(N) + 0.5 - N / 2) / N)
+    manhattan = (0.5 * np.outer(w, w)).astype(np.float32)
+    return torch.from_numpy(manhattan).to(DEVICE)
 
 # ---------------------------------------------------------------
 
@@ -399,21 +393,20 @@ def generate_features(nchannels, date, clead, \
     if power_transform != 1.0:
         precipitation_GRAF = np.power(precipitation_GRAF, power_transform)
 
-    Xpredict_all = np.zeros((1,nchannels,ny,nx), dtype=np.float32)
-
     # Match training order: GRAF, terrain_diff, RH, GRAF×terrain, GRAF×RH, dlon, dlat
-    Xpredict_all[0,0,:,:] = normalize_stats(precipitation_GRAF[:,:], 0)
-    Xpredict_all[0,1,:,:] = normalize_stats(t_diff[:,:], 1)
-    Xpredict_all[0,2,:,:] = normalize_stats(gfs_rh[:,:], 2)
-    interaction_terrain = precipitation_GRAF[:,:] * t_diff[:,:]
-    Xpredict_all[0,3,:,:] = normalize_stats(interaction_terrain, 3)
-    interaction_rh = precipitation_GRAF[:,:] * gfs_rh[:,:]
-    Xpredict_all[0,4,:,:] = normalize_stats(interaction_rh, 4)
-    Xpredict_all[0,5,:,:] = normalize_stats(dt_dlon[:,:], 5)
-    Xpredict_all[0,6,:,:] = normalize_stats(dt_dlat[:,:], 6)
+    # np.stack avoids a zeros allocation + 7 separate slice assignments
+    channels = np.stack([
+        normalize_stats(precipitation_GRAF, 0),
+        normalize_stats(t_diff, 1),
+        normalize_stats(gfs_rh, 2),
+        normalize_stats(precipitation_GRAF * t_diff, 3),
+        normalize_stats(precipitation_GRAF * gfs_rh, 4),
+        normalize_stats(dt_dlon, 5),
+        normalize_stats(dt_dlat, 6),
+    ], axis=0).astype(np.float32)
 
     # Convert to torch tensor on GPU
-    Xpredict_tensor = torch.from_numpy(Xpredict_all).float().to(DEVICE)
+    Xpredict_tensor = torch.from_numpy(channels[np.newaxis]).to(DEVICE)
 
     return Xpredict_tensor, precipitation_GRAF
 
@@ -493,17 +486,21 @@ def read_pytorch(cyyyymmddhh, clead):
 # -------------------------------------------------------------
 
 def calc_raw_probabilities(precipitation_GRAF, sigma):
-    """Compute smoothed GRAF probabilities for comparison."""
-    raw_probs = {}
+    """Compute smoothed GRAF probabilities for comparison (filters run in parallel)."""
     thresholds = {
         '0p25': 0.25, '1': 1.0, '2p5': 2.5,
         '5': 5.0, '10': 10.0
     }
-    for key, val in thresholds.items():
+
+    def compute_one(key_val):
+        key, val = key_val
         binary_field = np.where(precipitation_GRAF >= val, 1., 0.)
-        smoothed_prob = ndimage.gaussian_filter(binary_field, sigma)
-        raw_probs[key] = smoothed_prob
-    return raw_probs
+        return key, ndimage.gaussian_filter(binary_field, sigma)
+
+    with ThreadPoolExecutor(max_workers=len(thresholds)) as executor:
+        results = executor.map(compute_one, thresholds.items())
+
+    return dict(results)
 
 # -------------------------------------------------------------
 # Modular Function 2: OPTIMIZED Compute Gamma Model Probabilities
@@ -514,10 +511,11 @@ def calc_gamma_probabilities_optimized(model, Xpredict_tensor, manhattan_tensor,
     """
     OPTIMIZED: Run patch-based inference with Gamma model using batching.
 
-    For each pixel, the model predicts:
+    For each pixel, the model predicts parameters for a 2-component Gamma mixture:
     - fraction_zero (p0)
-    - shape (alpha)
-    - scale (theta)
+    - weight (w): mixing weight for component 1
+    - shape1, scale1: light precipitation component
+    - shape2, scale2: heavy precipitation component
 
     From these, compute P(X > threshold) for standard thresholds.
 
@@ -525,8 +523,12 @@ def calc_gamma_probabilities_optimized(model, Xpredict_tensor, manhattan_tensor,
     1. Process multiple patches in parallel (batched)
     2. Keep all tensors on GPU until final step
     3. Use torch.distributions.Gamma for GPU-accelerated probability computation
-    4. Mixed precision inference (if available)
+    4. Pre-allocated batch buffer (avoids repeated list + cat allocation)
+    5. Both patch passes combined into one loop
+    6. Gamma distributions created once (reused across all thresholds)
+    7. NaN checks consolidated (fewer GPU-CPU synchronizations)
     """
+    nchannels = Xpredict_tensor.shape[1]
 
     # Pre-allocate GPU tensors for accumulation (6 parameters for mixture)
     fraction_zero_accum = torch.zeros((ny, nx), dtype=torch.float32, device=DEVICE)
@@ -537,174 +539,135 @@ def calc_gamma_probabilities_optimized(model, Xpredict_tensor, manhattan_tensor,
     scale2_accum = torch.zeros((ny, nx), dtype=torch.float32, device=DEVICE)
     sumweights_all = torch.zeros((ny, nx), dtype=torch.float32, device=DEVICE)
 
+    # Combine both passes into one coordinate list (avoids two-call overhead)
     jcenter1 = range(N//2, ny-N//2+1, N//2)
     icenter1 = range(N//2, nx-N//2+1, N//2)
     jcenter2 = range(N//2 + N//4, ny-3*N//4, N//2)
     icenter2 = range(N//2 + N//4, nx-3*N//4, N//2)
 
-    def process_patches_batched(jcenters, icenters, pass_name):
-        """Process patches in batches for better GPU utilization."""
+    patch_coords = ([(j, i) for j in jcenter1 for i in icenter1] +
+                    [(j, i) for j in jcenter2 for i in icenter2])
 
-        # Collect all patch coordinates
-        patch_coords = []
-        for j in jcenters:
-            for i in icenters:
-                patch_coords.append((j, i))
+    num_patches = len(patch_coords)
+    print(f'Processing {num_patches} patches in batches of {batch_size}...')
 
-        num_patches = len(patch_coords)
-        print(f'{pass_name}: Processing {num_patches} patches in batches of {batch_size}...')
+    for batch_start in range(0, num_patches, batch_size):
+        batch_end = min(batch_start + batch_size, num_patches)
+        batch_coords = patch_coords[batch_start:batch_end]
+        current_batch_size = len(batch_coords)
 
-        # Process in batches
-        for batch_start in range(0, num_patches, batch_size):
-            batch_end = min(batch_start + batch_size, num_patches)
-            batch_coords = patch_coords[batch_start:batch_end]
-            current_batch_size = len(batch_coords)
+        # Pre-allocate batch buffer — fill in-place to avoid list + cat allocation
+        batch_tensor = torch.empty(current_batch_size, nchannels, N, N,
+                                   device=DEVICE, dtype=torch.float32)
+        batch_metadata = []
 
-            # Collect patches for this batch
-            batch_patches = []
-            batch_metadata = []  # Store (j, i, jmin, jmax, imin, imax, h_curr, w_curr)
+        for idx, (j, i) in enumerate(batch_coords):
+            jmin = j - N//2
+            jmax = j + N//2
+            imin = i - N//2
+            imax = i + N//2
 
-            for j, i in batch_coords:
-                jmin = j - N//2
-                jmax = j + N//2
-                imin = i - N//2
-                imax = i + N//2
+            # Slice as (nchannels, h, w) — avoids the leading batch dim on each patch
+            Xpatch = Xpredict_tensor[0, :, jmin:jmax, imin:imax]
+            h_curr, w_curr = Xpatch.shape[1], Xpatch.shape[2]
+            pad_h = N - h_curr
+            pad_w = N - w_curr
 
-                # Extract patch (avoid creating new tensors, use slicing)
-                # Xpredict_tensor shape: (1, nchannels, ny, nx)
-                Xpatch = Xpredict_tensor[:, :, jmin:jmax, imin:imax]
+            if pad_h > 0 or pad_w > 0:
+                batch_tensor[idx] = F.pad(Xpatch.unsqueeze(0),
+                                          (0, pad_w, 0, pad_h), mode='replicate')[0]
+            else:
+                batch_tensor[idx] = Xpatch
+            batch_metadata.append((j, i, jmin, jmax, imin, imax, h_curr, w_curr, pad_h, pad_w))
 
-                # Handle edge cases
-                _, _, h_curr, w_curr = Xpatch.shape
-                pad_h = N - h_curr
-                pad_w = N - w_curr
-
-                if pad_h > 0 or pad_w > 0:
-                    Xpatch = F.pad(Xpatch, (0, pad_w, 0, pad_h), mode='replicate')
-
-                batch_patches.append(Xpatch)
-                batch_metadata.append((j, i, jmin, jmax, imin, imax, h_curr, w_curr, pad_h, pad_w))
-
-            # Stack into single batch tensor: (batch_size, nchannels, N, N)
-            batch_tensor = torch.cat(batch_patches, dim=0)
-
-            # Run inference on entire batch
-            with torch.no_grad():
-                if USE_AMP:
-                    with torch.cuda.amp.autocast():
-                        logits = model(batch_tensor)
-                else:
+        # Run inference on entire batch
+        with torch.no_grad():
+            if USE_AMP:
+                with torch.cuda.amp.autocast():
                     logits = model(batch_tensor)
+            else:
+                logits = model(batch_tensor)
 
-                # Ensure float32 precision for stability
-                logits = logits.float()
+            # Ensure float32 precision for stability
+            logits = logits.float()
 
-                # Transform to parameters with numerical stability
-                # Clamp logits to prevent overflow in sigmoid/softplus
-                logits = torch.clamp(logits, min=-10, max=10)
+            # Clamp logits to prevent overflow in sigmoid/softplus
+            logits = torch.clamp(logits, min=-10, max=10)
 
-                # Extract 6 parameters for 2-component mixture
-                p0 = torch.sigmoid(logits[:, 0, :, :])
-                w = torch.sigmoid(logits[:, 1, :, :])
-                alpha1 = shape_min + F.softplus(logits[:, 2, :, :])
-                theta1 = scale_min + F.softplus(logits[:, 3, :, :])
+            # Extract 6 parameters for 2-component mixture
+            p0 = torch.sigmoid(logits[:, 0, :, :])
+            w = torch.sigmoid(logits[:, 1, :, :])
+            alpha1 = shape_min + F.softplus(logits[:, 2, :, :])
+            theta1 = scale_min + F.softplus(logits[:, 3, :, :])
 
-                # Hard ordering constraint: shape2 = shape1 + softplus(offset) + 0.5
-                shape2_offset = F.softplus(logits[:, 4, :, :])
-                alpha2 = alpha1 + shape2_offset + 0.5
+            # Hard ordering constraint: shape2 = shape1 + softplus(offset) + 0.5
+            shape2_offset = F.softplus(logits[:, 4, :, :])
+            alpha2 = alpha1 + shape2_offset + 0.5
 
-                theta2 = scale_min + F.softplus(logits[:, 5, :, :])
+            theta2 = scale_min + F.softplus(logits[:, 5, :, :])
 
-                # Check for NaNs
-                if (torch.isnan(p0).any() or torch.isnan(w).any() or
-                    torch.isnan(alpha1).any() or torch.isnan(theta1).any() or
-                    torch.isnan(alpha2).any() or torch.isnan(theta2).any()):
-                    print(f"  WARNING: NaN detected in batch {batch_start//batch_size}")
-                    p0 = torch.nan_to_num(p0, nan=0.5)
-                    w = torch.nan_to_num(w, nan=0.5)
-                    alpha1 = torch.nan_to_num(alpha1, nan=1.0)
-                    theta1 = torch.nan_to_num(theta1, nan=1.0)
-                    alpha2 = torch.nan_to_num(alpha2, nan=2.0)
-                    theta2 = torch.nan_to_num(theta2, nan=1.0)
+        # Distribute results back to accumulation arrays
+        for idx, (j, i, jmin, jmax, imin, imax, h_curr, w_curr, pad_h, pad_w) in \
+                enumerate(batch_metadata):
+            p0_patch     = p0[idx]
+            w_patch      = w[idx]
+            alpha1_patch = alpha1[idx]
+            theta1_patch = theta1[idx]
+            alpha2_patch = alpha2[idx]
+            theta2_patch = theta2[idx]
 
-            # Distribute results back to accumulation arrays
-            for idx, (j, i, jmin, jmax, imin, imax, h_curr, w_curr, pad_h, pad_w) in enumerate(batch_metadata):
-                # Extract this patch's results
-                p0_patch = p0[idx, :, :]
-                w_patch = w[idx, :, :]
-                alpha1_patch = alpha1[idx, :, :]
-                theta1_patch = theta1[idx, :, :]
-                alpha2_patch = alpha2[idx, :, :]
-                theta2_patch = theta2[idx, :, :]
+            # Crop all patches back to true dimensions when edge-padded (bug fix)
+            if pad_h > 0 or pad_w > 0:
+                p0_patch     = p0_patch[:h_curr, :w_curr]
+                w_patch      = w_patch[:h_curr, :w_curr]
+                alpha1_patch = alpha1_patch[:h_curr, :w_curr]
+                theta1_patch = theta1_patch[:h_curr, :w_curr]
+                alpha2_patch = alpha2_patch[:h_curr, :w_curr]
+                theta2_patch = theta2_patch[:h_curr, :w_curr]
+                mh_weight = manhattan_tensor[:h_curr, :w_curr]
+            else:
+                mh_weight = manhattan_tensor
 
-                # Crop back if we padded
-                if pad_h > 0 or pad_w > 0:
-                    p0_patch = p0_patch[:h_curr, :w_curr]
-                    alpha_patch = alpha_patch[:h_curr, :w_curr]
-                    theta_patch = theta_patch[:h_curr, :w_curr]
-                    mh_weight = manhattan_tensor[:h_curr, :w_curr]
-                else:
-                    mh_weight = manhattan_tensor
+            # Accumulate weighted parameters (in-place operations on GPU)
+            fraction_zero_accum[jmin:jmax, imin:imax] += p0_patch * mh_weight
+            weight_accum[jmin:jmax, imin:imax]        += w_patch * mh_weight
+            shape1_accum[jmin:jmax, imin:imax]        += alpha1_patch * mh_weight
+            scale1_accum[jmin:jmax, imin:imax]        += theta1_patch * mh_weight
+            shape2_accum[jmin:jmax, imin:imax]        += alpha2_patch * mh_weight
+            scale2_accum[jmin:jmax, imin:imax]        += theta2_patch * mh_weight
+            sumweights_all[jmin:jmax, imin:imax]      += mh_weight
 
-                # Accumulate weighted parameters (in-place operations on GPU)
-                fraction_zero_accum[jmin:jmax, imin:imax] += p0_patch * mh_weight
-                weight_accum[jmin:jmax, imin:imax] += w_patch * mh_weight
-                shape1_accum[jmin:jmax, imin:imax] += alpha1_patch * mh_weight
-                scale1_accum[jmin:jmax, imin:imax] += theta1_patch * mh_weight
-                shape2_accum[jmin:jmax, imin:imax] += alpha2_patch * mh_weight
-                scale2_accum[jmin:jmax, imin:imax] += theta2_patch * mh_weight
-                sumweights_all[jmin:jmax, imin:imax] += mh_weight
-
-            # Progress indicator
-            if (batch_start // batch_size) % 10 == 0:
-                print(f'  Processed {batch_end}/{num_patches} patches...')
-
-    # Process both passes
-    process_patches_batched(jcenter1, icenter1, 'Pass 1')
-    process_patches_batched(jcenter2, icenter2, 'Pass 2')
+        if (batch_start // batch_size) % 10 == 0:
+            print(f'  Processed {batch_end}/{num_patches} patches...')
 
     # Normalize weighted averages (on GPU)
-    # Add epsilon to prevent division by zero
     sumweights_safe = torch.clamp(sumweights_all, min=1e-9)
     valid_mask = sumweights_all > 1e-9
 
-    fraction_zero = torch.zeros((ny, nx), dtype=torch.float32, device=DEVICE)
-    shape_params = torch.zeros((ny, nx), dtype=torch.float32, device=DEVICE)
-    scale_params = torch.zeros((ny, nx), dtype=torch.float32, device=DEVICE)
+    # Scalar fill tensors broadcast without allocating full (ny, nx) temporaries
+    def scalar(v):
+        return torch.tensor(v, device=DEVICE, dtype=torch.float32)
 
-    # Safe division for all 6 parameters
-    fraction_zero = torch.where(valid_mask, fraction_zero_accum / sumweights_safe, torch.ones_like(fraction_zero))
-    weight_params = torch.where(valid_mask, weight_accum / sumweights_safe, 0.5 * torch.ones_like(weight_accum))
-    shape1_params = torch.where(valid_mask, shape1_accum / sumweights_safe, torch.ones_like(shape1_accum))
-    scale1_params = torch.where(valid_mask, scale1_accum / sumweights_safe, torch.ones_like(scale1_accum))
-    shape2_params = torch.where(valid_mask, shape2_accum / sumweights_safe, 2.0 * torch.ones_like(shape2_accum))
-    scale2_params = torch.where(valid_mask, scale2_accum / sumweights_safe, torch.ones_like(scale2_accum))
+    fraction_zero = torch.where(valid_mask, fraction_zero_accum / sumweights_safe, scalar(1.0))
+    weight_params  = torch.where(valid_mask, weight_accum  / sumweights_safe, scalar(0.5))
+    shape1_params  = torch.where(valid_mask, shape1_accum  / sumweights_safe, scalar(1.0))
+    scale1_params  = torch.where(valid_mask, scale1_accum  / sumweights_safe, scalar(1.0))
+    shape2_params  = torch.where(valid_mask, shape2_accum  / sumweights_safe, scalar(2.0))
+    scale2_params  = torch.where(valid_mask, scale2_accum  / sumweights_safe, scalar(1.0))
 
-    # Check for NaNs after normalization
-    if torch.isnan(fraction_zero).any():
-        print("  WARNING: NaN in fraction_zero after normalization")
+    # Single NaN sweep across all 6 parameters — one GPU sync instead of six
+    if torch.stack([fraction_zero, weight_params, shape1_params,
+                    scale1_params, shape2_params, scale2_params]).isnan().any():
+        print("  WARNING: NaN detected in parameters after normalization")
         fraction_zero = torch.nan_to_num(fraction_zero, nan=0.5)
-    if torch.isnan(weight_params).any():
-        print("  WARNING: NaN in weight_params after normalization")
         weight_params = torch.nan_to_num(weight_params, nan=0.5)
-    if torch.isnan(shape1_params).any():
-        print("  WARNING: NaN in shape1_params after normalization")
         shape1_params = torch.nan_to_num(shape1_params, nan=1.0)
-    if torch.isnan(scale1_params).any():
-        print("  WARNING: NaN in scale1_params after normalization")
         scale1_params = torch.nan_to_num(scale1_params, nan=1.0)
-    if torch.isnan(shape2_params).any():
-        print("  WARNING: NaN in shape2_params after normalization")
         shape2_params = torch.nan_to_num(shape2_params, nan=2.0)
-    if torch.isnan(scale2_params).any():
-        print("  WARNING: NaN in scale2_params after normalization")
         scale2_params = torch.nan_to_num(scale2_params, nan=1.0)
 
     # Compute probabilities from 2-component Gamma mixture using PyTorch (GPU-accelerated!)
     # P(X > threshold) = (1 - p0) * [w * SF1(threshold) + (1-w) * SF2(threshold)]
-    # where SF_i = 1 - CDF_i is the survival function for component i
-    #                  = (1 - p0) * (1 - CDF(threshold))
-
     print('Computing probabilities from Gamma mixture (GPU-accelerated)...')
 
     gamma_probs = {}
@@ -716,55 +679,41 @@ def calc_gamma_probabilities_optimized(model, Xpredict_tensor, manhattan_tensor,
         '10': 10.0
     }
 
-    # Use torch.distributions for GPU-accelerated Gamma CDF
-    # Create Gamma distribution object
-    # Note: PyTorch uses concentration (alpha) and rate (1/theta)
-    # We have scale (theta), so rate = 1/scale
-    from torch.distributions import Gamma
+    # Clamp parameters and build Gamma distributions ONCE outside the threshold loop
+    alpha1_safe = torch.clamp(shape1_params, min=0.1)
+    theta1_safe = torch.clamp(scale1_params, min=0.01)
+    alpha2_safe = torch.clamp(shape2_params, min=0.1)
+    theta2_safe = torch.clamp(scale2_params, min=0.01)
+    w_safe = torch.clamp(weight_params, min=0.0, max=1.0)
+
+    # Single NaN check for Gamma input parameters (one GPU sync)
+    if torch.stack([alpha1_safe, theta1_safe, alpha2_safe, theta2_safe, w_safe]).isnan().any():
+        print("  WARNING: NaN in parameters before Gamma mixture computation")
+        alpha1_safe = torch.nan_to_num(alpha1_safe, nan=1.0)
+        theta1_safe = torch.nan_to_num(theta1_safe, nan=1.0)
+        alpha2_safe = torch.nan_to_num(alpha2_safe, nan=2.0)
+        theta2_safe = torch.nan_to_num(theta2_safe, nan=1.0)
+        w_safe = torch.nan_to_num(w_safe, nan=0.5)
+
+    # PyTorch Gamma uses rate = 1 / scale
+    rate1 = 1.0 / theta1_safe
+    rate2 = 1.0 / theta2_safe
+    gamma_dist1 = Gamma(concentration=alpha1_safe, rate=rate1, validate_args=False)
+    gamma_dist2 = Gamma(concentration=alpha2_safe, rate=rate2, validate_args=False)
 
     for key, threshold in thresholds.items():
-        # Ensure positive parameters for both components (numerical stability)
-        alpha1_safe = torch.clamp(shape1_params, min=0.1)
-        theta1_safe = torch.clamp(scale1_params, min=0.01)
-        alpha2_safe = torch.clamp(shape2_params, min=0.1)
-        theta2_safe = torch.clamp(scale2_params, min=0.01)
-        w_safe = torch.clamp(weight_params, min=0.0, max=1.0)
-
-        # Check for NaNs before Gamma distribution
-        if (torch.isnan(alpha1_safe).any() or torch.isnan(theta1_safe).any() or
-            torch.isnan(alpha2_safe).any() or torch.isnan(theta2_safe).any() or
-            torch.isnan(w_safe).any()):
-            print(f"  WARNING: NaN in parameters before Gamma mixture for threshold {key}")
-            alpha1_safe = torch.nan_to_num(alpha1_safe, nan=1.0)
-            theta1_safe = torch.nan_to_num(theta1_safe, nan=1.0)
-            alpha2_safe = torch.nan_to_num(alpha2_safe, nan=2.0)
-            theta2_safe = torch.nan_to_num(theta2_safe, nan=1.0)
-            w_safe = torch.nan_to_num(w_safe, nan=0.5)
-
-        # PyTorch Gamma distribution uses rate parameterization: rate = 1 / scale
-        rate1 = 1.0 / theta1_safe
-        rate2 = 1.0 / theta2_safe
-
-        # Create Gamma distributions for both components (disable validation)
-        gamma_dist1 = Gamma(concentration=alpha1_safe, rate=rate1, validate_args=False)
-        gamma_dist2 = Gamma(concentration=alpha2_safe, rate=rate2, validate_args=False)
-
-        # Compute CDF at threshold for both components
         threshold_tensor = torch.tensor(threshold, device=DEVICE, dtype=torch.float32)
         cdf1 = gamma_dist1.cdf(threshold_tensor)
         cdf2 = gamma_dist2.cdf(threshold_tensor)
 
-        # Check for NaN in CDFs
         if torch.isnan(cdf1).any() or torch.isnan(cdf2).any():
             print(f"  WARNING: NaN in CDF for threshold {key}")
             cdf1 = torch.nan_to_num(cdf1, nan=0.0)
             cdf2 = torch.nan_to_num(cdf2, nan=0.0)
 
-        # Clamp CDFs to [0, 1]
         cdf1 = torch.clamp(cdf1, min=0.0, max=1.0)
         cdf2 = torch.clamp(cdf2, min=0.0, max=1.0)
 
-        # Survival functions: SF = 1 - CDF
         sf1 = 1.0 - cdf1
         sf2 = 1.0 - cdf2
 
@@ -773,12 +722,9 @@ def calc_gamma_probabilities_optimized(model, Xpredict_tensor, manhattan_tensor,
 
         # P(X > threshold) = (1 - p0) * mixture_sf
         prob_exceed = (1.0 - fraction_zero) * mixture_sf
-
-        # Final NaN check
         prob_exceed = torch.nan_to_num(prob_exceed, nan=0.0)
         prob_exceed = torch.clamp(prob_exceed, min=0.0, max=1.0)
 
-        # Store result (keep on GPU for now)
         gamma_probs[key] = prob_exceed
 
     # Transfer final results to CPU for saving
@@ -790,9 +736,7 @@ def calc_gamma_probabilities_optimized(model, Xpredict_tensor, manhattan_tensor,
     shape2_params_cpu = shape2_params.cpu().numpy()
     scale2_params_cpu = scale2_params.cpu().numpy()
 
-    gamma_probs_cpu = {}
-    for key in gamma_probs:
-        gamma_probs_cpu[key] = gamma_probs[key].cpu().numpy()
+    gamma_probs_cpu = {key: v.cpu().numpy() for key, v in gamma_probs.items()}
 
     return (gamma_probs_cpu, fraction_zero_cpu, weight_params_cpu,
             shape1_params_cpu, scale1_params_cpu, shape2_params_cpu, scale2_params_cpu)
