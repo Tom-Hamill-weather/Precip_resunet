@@ -193,19 +193,16 @@ def main():
     quality_anal = sample['MRMS_qual']
     gfs_r        = sample['GFS_r']
 
-    # 3. Set up Plotting - 3 panels top row, 1 centered panel bottom row
+    # 3. Set up Plotting - 2x2 grid
 
-    fig = plt.figure(figsize=(18, 10))
+    fig = plt.figure(figsize=(14, 12))
 
-    # Top row: 3 equally-spaced panels
-    gs_top = fig.add_gridspec(1, 3, left=0.06, right=0.97, top=0.93, bottom=0.52, wspace=0.35)
-    ax1 = fig.add_subplot(gs_top[0, 0])
-    ax2 = fig.add_subplot(gs_top[0, 1])
-    ax3 = fig.add_subplot(gs_top[0, 2])
-
-    # Bottom row: same column geometry, single panel in the centre column
-    gs_bot = fig.add_gridspec(1, 3, left=0.06, right=0.97, top=0.44, bottom=0.05, wspace=0.35)
-    ax5 = fig.add_subplot(gs_bot[0, 1])
+    gs = fig.add_gridspec(2, 2, left=0.06, right=0.97, top=0.95, bottom=0.05,
+                          hspace=0.35, wspace=0.35)
+    ax1 = fig.add_subplot(gs[0, 0])  # GRAF
+    ax2 = fig.add_subplot(gs[0, 1])  # Terrain
+    ax3 = fig.add_subplot(gs[1, 0])  # GFS RH
+    ax4 = fig.add_subplot(gs[1, 1])  # MRMS
 
     cmap_p, norm_p, levs_p = get_precip_colormap()
     cmap_t, norm_t, levs_t = get_terrain_colormap()
@@ -215,29 +212,39 @@ def main():
 
     pcm1 = ax1.pcolormesh(precip_fcst, cmap=cmap_p, \
         norm=norm_p, shading='nearest')
-    ax1.set_title(f"Sample {sample_idx}: GRAF Forecast (Feature 1)", fontsize=13)
+    ax1.set_title("GRAF Forecast (Feature 1)", fontsize=18)
     ax1.invert_yaxis()
     cb1 = fig.colorbar(pcm1, ax=ax1, orientation='vertical', shrink=0.9,
         ticks=levs_p, extend='max')
-    cb1.set_label('mm', fontsize=10)
+    cb1.set_label('mm', fontsize=14)
 
     # --- Panel 2: Terrain Deviations ---
 
     pcm2 = ax2.pcolormesh(terr_dev, cmap=cmap_t, \
         norm=norm_t, shading='nearest')
-    ax2.set_title(f"Sample {sample_idx}: Terrain Deviation (Feature 2)", fontsize=13)
+    ax2.set_title("Terrain Deviation (Feature 2)", fontsize=18)
     ax2.invert_yaxis()
     cb2 = fig.colorbar(pcm2, ax=ax2, orientation='vertical', shrink=0.9,
                        ticks=levs_t, extend='both')
-    cb2.set_label('meters', fontsize=10)
+    cb2.set_label('meters', fontsize=14)
 
-    # --- Panel 3: MRMS Analysis (with Quality Mask) ---
+    # --- Panel 3 (bottom left): GFS Column-Average Relative Humidity ---
 
-    # 3a. Plot precipitation first
-    pcm3 = ax3.pcolormesh(precip_anal, cmap=cmap_p, \
+    pcm3 = ax3.pcolormesh(gfs_r, cmap=cmap_rh, \
+        norm=norm_rh, shading='nearest')
+    ax3.set_title("GFS Column RH (Feature)", fontsize=18)
+    ax3.invert_yaxis()
+    cb3 = fig.colorbar(pcm3, ax=ax3, orientation='vertical', shrink=0.9,
+                       ticks=levs_rh, extend='max')
+    cb3.set_label('%', fontsize=14)
+
+    # --- Panel 4 (bottom right): MRMS Analysis (with Quality Mask) ---
+
+    # 4a. Plot precipitation first
+    pcm4 = ax4.pcolormesh(precip_anal, cmap=cmap_p, \
         norm=norm_p, shading='nearest')
 
-    # 3b. Create and plot quality mask
+    # 4b. Create and plot quality mask
     # We want to mask (hide) good data (quality >= 0.1) so we can see the precip.
     # We leave bad data (quality < 0.1) unmasked to plot the gray overlay.
     bad_data_mask = np.ma.masked_where(quality_anal >= 0.1, np.ones_like(quality_anal))
@@ -246,23 +253,13 @@ def main():
     cmap_mask = colors.ListedColormap(['gray'])
 
     # Plot overlay with transparency (alpha=0.5)
-    ax3.pcolormesh(bad_data_mask, cmap=cmap_mask, shading='nearest', alpha=0.5)
+    ax4.pcolormesh(bad_data_mask, cmap=cmap_mask, shading='nearest', alpha=0.5)
 
-    ax3.set_title(f"Sample {sample_idx}: MRMS Analysis (Target)", fontsize=13)
-    ax3.invert_yaxis()
-    cb3 = fig.colorbar(pcm3, ax=ax3, orientation='vertical', shrink=0.9,
+    ax4.set_title("MRMS Analysis (Target)", fontsize=18)
+    ax4.invert_yaxis()
+    cb4 = fig.colorbar(pcm4, ax=ax4, orientation='vertical', shrink=0.9,
                        ticks=levs_p, extend='max')
-    cb3.set_label('mm', fontsize=10)
-
-    # --- Panel 4 (bottom centre): GFS Column-Average Relative Humidity ---
-
-    pcm5 = ax5.pcolormesh(gfs_r, cmap=cmap_rh, \
-        norm=norm_rh, shading='nearest')
-    ax5.set_title(f"Sample {sample_idx}: GFS Column RH (Feature)", fontsize=13)
-    ax5.invert_yaxis()
-    cb5 = fig.colorbar(pcm5, ax=ax5, orientation='vertical', shrink=0.9,
-                       ticks=levs_rh, extend='max')
-    cb5.set_label('%', fontsize=10)
+    cb4.set_label('mm', fontsize=14)
 
     # 4. Save Output
     base_name = os.path.basename(filename).replace('.cPick', '').replace('.nc', '')
