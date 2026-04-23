@@ -6,7 +6,6 @@ Now includes GFS features: PWAT and column-average relative humidity (r).
 """
 import sys
 import os
-import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
@@ -99,32 +98,32 @@ def get_rh_colormap():
 # Data Loading
 # --------------------------------------------------------------------
 
-def load_sequential_pickle(filename):
+def load_patch_file(filename):
     """
     Reads the file created by 'save_patched_GRAF_MRMS_GFS.py'.
-    The format is multiple numpy arrays dumped sequentially.
-    Now includes GFS features: GFS_pwat, GFS_r, GFS_cape.
+    Supports both NetCDF (.nc, used on G5 GPU instance) and pickle (.cPick)
+    formats via data_loader_utils.load_training_data().
+    If the exact path is not found, tries the alternate extension.
     """
-    keys_order = ['GRAF', 'MRMS', 'MRMS_qual', 'terdiff_x_GRAF',
-        'terrain_diff', 'dt_dlon', 'dt_dlat', 'init_times', 'valid_times',
-        'GFS_pwat', 'GFS_r', 'GFS_cape']
-
-    data = {}
+    from data_loader_utils import load_training_data
 
     if not os.path.exists(filename):
-        print(f"Error: File {filename} not found.")
-        sys.exit(1)
+        if filename.endswith('.cPick'):
+            alt = filename.replace('.cPick', '.nc')
+        elif filename.endswith('.nc'):
+            alt = filename.replace('.nc', '.cPick')
+        else:
+            alt = None
+
+        if alt and os.path.exists(alt):
+            print(f"Note: {os.path.basename(filename)} not found; using {os.path.basename(alt)}")
+            filename = alt
+        else:
+            print(f"Error: File {filename} not found.")
+            sys.exit(1)
 
     print(f"Reading file: {filename}")
-
-    with open(filename, 'rb') as f:
-        try:
-            for key in keys_order:
-                data[key] = pickle.load(f)
-        except EOFError:
-            print(f"Warning: Reached end of file early. Missing keys after {key}.")
-
-    return data
+    return load_training_data(filename)
 
 # ---------------------------------------------------------------------------------
 # Main Plotting Logic
@@ -133,8 +132,10 @@ def load_sequential_pickle(filename):
 def main():
     if len(sys.argv) != 3:
         print("Usage: python plot_graf_mrms_gfs_samples.py <filename> <sample_index>")
-        print("Example: python plot_graf_mrms_gfs_samples.py "
-              "/data2/resnet_data/trainings/GRAF_Unet_data_train_2025120100_12h.cPick 12")
+        print("Example (G5):  python plot_graf_mrms_gfs_samples.py "
+              "/data/resnet_data/patch_data/GRAF_Unet_data_train_2025120100_12h.nc 12")
+        print("Example (CPU): python plot_graf_mrms_gfs_samples.py "
+              "/data2/resnet_data/trainings/GRAF_Unet_data_train_2025120100_12h.nc 12")
         sys.exit(1)
 
     filename = sys.argv[1]
@@ -146,7 +147,7 @@ def main():
         sys.exit(1)
 
     # 1. Load Data
-    data_store = load_sequential_pickle(filename)
+    data_store = load_patch_file(filename)
 
     # Validate we have the necessary keys
     required_keys = ['GRAF', 'terrain_diff', 'MRMS', 'MRMS_qual', 'GFS_pwat', 'GFS_r']
@@ -261,7 +262,7 @@ def main():
     cb5.set_label('%', fontsize=10)
 
     # 4. Save Output
-    base_name = os.path.basename(filename).replace('.cPick', '')
+    base_name = os.path.basename(filename).replace('.cPick', '').replace('.nc', '')
     output_png = f"plot_{base_name}_sample_{sample_idx}.png"
 
     plt.savefig(output_png, dpi=300, bbox_inches='tight')
