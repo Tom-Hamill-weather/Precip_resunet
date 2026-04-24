@@ -322,6 +322,16 @@ if not cache_loaded:
                 nsamps_sigmas[ithresh,isigma] = \
                     nsamps_sigmas[ithresh,isigma] + nsamps_raw
 
+    # --- Bail out if the date loop found nothing (no prob or MRMS files).
+    #     Don't save an empty cache and don't generate meaningless plots.
+
+    if np.sum(nsamps_sigmas) == 0:
+        print(f'\nERROR: No valid forecast/MRMS pairs found for '
+              f'{cyyyymmddhh_begin} to {cyyyymmddhh_end}, lead {clead}h.')
+        print(f'  Expected probability files under: {probs_directory}')
+        print('  No cache saved; no plots generated.')
+        sys.exit(1)
+
     # --- Save accumulated arrays to cache for future re-runs.
 
     os.makedirs(relia_save_dir, exist_ok=True)
