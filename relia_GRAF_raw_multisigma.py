@@ -98,17 +98,6 @@ def read_MRMS(MRMS_directory, date):
         istat = 0
         nc.close()
 
-        # ---- QC diagnostics
-        ntotal = quality.size
-        nbad_quality = np.sum(quality <= 0.5)
-        nneg_precip = np.sum(observations < 0.0)
-        nhigh_precip = np.sum(observations > 200.0)
-        ngood = np.sum(quality > 0.5)
-        print(f'  MRMS QC: quality range [{quality.min():.3f}, {quality.max():.3f}], '
-              f'{nbad_quality}/{ntotal} pixels filtered (quality<=0.5)')
-        print(f'  MRMS QC: precip range [{observations.min():.3f}, {observations.max():.3f}] mm, '
-              f'{nneg_precip} pixels <0, {nhigh_precip} pixels >200mm')
-        print(f'  MRMS QC: {ngood} good-quality pixels retained ({100.*ngood/ntotal:.1f}%)')
     else:
         istat = -1
         quality = np.empty((0,0),dtype=float)
@@ -299,11 +288,6 @@ if not cache_loaded:
                     raw_prob = p0p25mm_raw[isigma, :,:]
                 elif ithresh == 1:
                     raw_prob = p1mm_raw[isigma, :,:]
-                    if isigma == 3:
-                        p50, p90, p95, p99 = np.percentile(raw_prob, [50, 90, 95, 99])
-                        print(f'    GRAF p(>=1mm) sigma[3] percentiles: '
-                              f'50th={p50:.4f}, 90th={p90:.4f}, '
-                              f'95th={p95:.4f}, 99th={p99:.4f}')
                 elif ithresh == 2:
                     raw_prob = p5mm_raw[isigma, :,:]
                 elif ithresh == 3:
