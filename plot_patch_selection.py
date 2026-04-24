@@ -7,10 +7,10 @@ Usage:
 Example:
     python plot_patch_selection.py 2025021700 12   # Feb 17 2025 – widespread SE flooding
 
-Illustrates the 96×96 patch sampling used in save_patched_GRAF_MRMS_GFS.py.
-Reads raw GRAF precipitation and MRMS quality data, runs the micro-sampling
-logic (weighted by smoothed precipitation, quality-filtered), and plots the
-GRAF field on a CONUS basemap with each selected patch shown as a rectangle.
+Illustrates the non-overlapping 96×96 patch sampling strategy.
+Uses a stride-96 tiled grid with a date-seeded random global shift to prevent
+terrain over-learning.  Wet patches (blue) are sampled by precip^1.5 weight;
+dry patches (red) are sampled uniformly.
 """
 
 import os
@@ -47,43 +47,98 @@ def detect_config():
         return 'config_hdo.ini', None
     return 'config_laptop.ini', None
 
-# ─── Patch selection (matches save_patched_GRAF_MRMS_GFS.py exactly) ─────────
+# ─── Patch selection: non-overlapping tiled grid with random global shift ─────
 
-def select_patches(precip_graf, quality_mrms, ny, nx, nsamps=35, seed=42):
+def select_patches_nonoverlapping(precip_graf, quality_mrms, ny, nx, cyyyymmddhh):
     """
-    Micro-sampling: weighted random selection of 96×96 patch centres.
+    Non-overlapping 96×96 patch selection.
 
-    Candidates come from a dense strided grid (stride=24).  Each candidate
-    is weighted by smoothed_precip² so wetter regions are preferred.
-    Candidates where >10% of MRMS pixels are flagged bad are excluded.
+    Algorithm:
+      1. Seed from the date string so each forecast day gets a unique shift.
+      2. Draw (shift_y, shift_x) uniformly from [0, 96) — shifts the tile grid
+         so terrain never falls at the same patch-local position across days.
+      3. Tile the valid domain (matching the original y/x bounds) with stride=96.
+      4. Exclude tiles where >10% of MRMS pixels are bad quality.
+      5. Classify each remaining tile as wet (patch max GRAF >= 0.5 mm) or dry.
+      6. Sample wet tiles weighted by mean_precip^1.5:
+           n_wet = 35 if domain mean > 0.15 mm, 25 if >= 0.10, 10 otherwise.
+      7. Sample 5-8 dry tiles uniformly at random.
+         (No padding to a fixed total — on dry days, only dry tiles are taken.)
+    Returns (j_sel, i_sel, is_wet) where is_wet[k] is True for wet patches.
     """
-    np.random.seed(seed)
-    smoothed = ndimage.gaussian_filter(precip_graf, sigma=30)
+    seed = int(cyyyymmddhh) % (2**31)
+    rng = np.random.default_rng(seed)
 
-    stride = 24
-    yy, xx = np.meshgrid(
-        np.arange(ny // 8 + 65, ny * 4 // 5, stride),
-        np.arange(nx // 10,      9 * nx // 10, stride),
-        indexing='ij'
-    )
+    shift_y = int(rng.integers(0, 96))
+    shift_x = int(rng.integers(0, 96))
+
+    # Valid center range (same domain bounds as original code)
+    y_min = ny // 8 + 65
+    y_max = ny * 4 // 5
+    x_min = nx // 10
+    x_max = 9 * nx // 10
+
+    centers_y = np.arange(y_min + shift_y, y_max, 96)
+    centers_x = np.arange(x_min + shift_x, x_max, 96)
+
+    # Ensure full 96×96 patch fits within the array
+    centers_y = centers_y[(centers_y - 48 >= 0) & (centers_y + 48 < ny)]
+    centers_x = centers_x[(centers_x - 48 >= 0) & (centers_x + 48 < nx)]
+
+    yy, xx = np.meshgrid(centers_y, centers_x, indexing='ij')
     fy, fx = yy.ravel(), xx.ravel()
 
-    vals = smoothed[fy, fx]
-    pmax = float(np.max(vals ** 2)) or 1.0
-    weights = 1e-4 + (1.0 - 1e-4) * (vals ** 2) / pmax
+    if len(fy) == 0:
+        return np.array([], dtype=int), np.array([], dtype=int), np.array([], dtype=bool)
 
-    bad_frac = ndimage.uniform_filter((quality_mrms <= 0.01).astype(float),
-                                      size=96)
-    weights[bad_frac[fy, fx] > 0.10] = 0.0
+    # Per-patch statistics (value at [j,i] = statistic over 96×96 block)
+    patch_mean = ndimage.uniform_filter(precip_graf.astype(float), size=96)
+    patch_max  = ndimage.maximum_filter(precip_graf.astype(float), size=96)
+    bad_frac   = ndimage.uniform_filter((quality_mrms <= 0.01).astype(float), size=96)
 
-    wsum = weights.sum()
-    if wsum == 0:
-        return np.array([], dtype=int), np.array([], dtype=int)
+    pmean = patch_mean[fy, fx]
+    pmax  = patch_max[fy, fx]
+    bfrac = bad_frac[fy, fx]
 
-    probs   = weights / wsum
-    chosen  = np.random.choice(len(fy), size=min(nsamps, len(fy)),
-                               replace=False, p=probs)
-    return fy[chosen], fx[chosen]
+    # Drop patches with too much bad MRMS data (training masks individual bad
+    # pixels via ignore_index=-1, so a 50% threshold is reasonable)
+    valid = bfrac <= 0.50
+    fy, fx, pmean, pmax = fy[valid], fx[valid], pmean[valid], pmax[valid]
+
+    if len(fy) == 0:
+        return np.array([], dtype=int), np.array([], dtype=int), np.array([], dtype=bool)
+
+    # Wet: any pixel in the patch reaches 0.5 mm; weights by patch mean for sampling
+    wet_mask = pmax >= 0.5
+    dry_mask = ~wet_mask
+
+    fy_wet, fx_wet = fy[wet_mask], fx[wet_mask]
+    fy_dry, fx_dry = fy[dry_mask], fx[dry_mask]
+    pm_wet = pmean[wet_mask]
+
+    domain_mean = float(precip_graf.mean())
+    n_wet = 35 if domain_mean > 0.15 else (25 if domain_mean >= 0.10 else 10)
+    n_dry = int(rng.integers(5, 9))  # 5–8 inclusive
+
+    j_out, i_out, wet_flag = [], [], []
+
+    if len(fy_wet) > 0:
+        w = pm_wet ** 1.5
+        w /= w.sum()
+        n_take = min(n_wet, len(fy_wet))
+        idx = rng.choice(len(fy_wet), size=n_take, replace=False, p=w)
+        j_out.extend(fy_wet[idx]);  i_out.extend(fx_wet[idx])
+        wet_flag.extend([True] * n_take)
+
+    if len(fy_dry) > 0:
+        n_take = min(n_dry, len(fy_dry))
+        idx = rng.choice(len(fy_dry), size=n_take, replace=False)
+        j_out.extend(fy_dry[idx]);  i_out.extend(fx_dry[idx])
+        wet_flag.extend([False] * n_take)
+
+    return (np.array(j_out, dtype=int),
+            np.array(i_out, dtype=int),
+            np.array(wet_flag, dtype=bool))
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
@@ -156,11 +211,13 @@ def main():
 
     # ── Run patch selection ───────────────────────────────────────────────────
     domain_mean = float(precip_graf.mean())
-    nsamps = 50 if domain_mean > 0.15 else (28 if domain_mean < 0.10 else 35)
-    print(f"Domain mean = {domain_mean:.4f} mm  →  nsamps = {nsamps}")
+    print(f"Domain mean = {domain_mean:.4f} mm")
 
-    j_sel, i_sel = select_patches(precip_graf, qual, ny, nx, nsamps=nsamps)
-    print(f"Selected {len(j_sel)} patches")
+    j_sel, i_sel, is_wet = select_patches_nonoverlapping(
+        precip_graf, qual, ny, nx, cyyyymmddhh)
+    n_wet = int(is_wet.sum())
+    n_dry = int((~is_wet).sum())
+    print(f"Selected {len(j_sel)} patches ({n_wet} wet, {n_dry} dry)")
 
     # ── Basemap ───────────────────────────────────────────────────────────────
     # Use explicit CONUS-focused bounds so the data fills the figure; the full
@@ -189,10 +246,10 @@ def main():
     fig.subplots_adjust(left=0.01, right=0.99, bottom=0.13, top=0.93)
 
     ax.set_title(
-        f"GRAF 1-h precipitation and selected 96×96 training patches\n"
+        f"GRAF 1-h precipitation — non-overlapping 96×96 training patches\n"
         f"Init: {cyyyymmddhh}   Valid: {valid}   Lead: +{clead} h   "
-        f"N = {len(j_sel)} patches",
-        fontsize=20
+        f"N = {len(j_sel)} patches  ({n_wet} wet, {n_dry} dry)",
+        fontsize=18
     )
 
     CS = m.pcolormesh(xg, yg, precip_graf, cmap=cmap, norm=norm,
@@ -208,30 +265,37 @@ def main():
     cb.ax.tick_params(labelsize=13)
     cb.set_label('1-h accumulated precipitation (mm)', fontsize=14)
 
-    # ── Patch rectangles ──────────────────────────────────────────────────────
-    # Build polygon corners for each selected patch in map coordinates.
-    # The GRAF grid is Lambert Conformal so patches are square in grid space
-    # but may appear slightly non-rectangular on the lat/lon-based map; we use
-    # the actual four corner lat/lons to be exact.
-    polys = []
+    # ── Patch rectangles (blue = wet, red = dry) ──────────────────────────────
     r = PATCH_HALF
-    for jy, ix in zip(j_sel, i_sel):
-        j0 = max(jy - r, 0);    j1 = min(jy + r, ny - 1)
-        i0 = max(ix - r, 0);    i1 = min(ix + r, nx - 1)
-        clat = [lats[j0, i0], lats[j0, i1], lats[j1, i1], lats[j1, i0]]
-        clon = [lons[j0, i0], lons[j0, i1], lons[j1, i1], lons[j1, i0]]
-        cx, cy = m(clon, clat)
-        polys.append(Polygon(list(zip(cx, cy)), closed=True))
+    for color_flag, edge_color in [(True, '#0044CC'), (False, '#CC2200')]:
+        polys = []
+        mask = is_wet if color_flag else ~is_wet
+        for jy, ix in zip(j_sel[mask], i_sel[mask]):
+            j0 = max(jy - r, 0);    j1 = min(jy + r, ny - 1)
+            i0 = max(ix - r, 0);    i1 = min(ix + r, nx - 1)
+            clat = [lats[j0, i0], lats[j0, i1], lats[j1, i1], lats[j1, i0]]
+            clon = [lons[j0, i0], lons[j0, i1], lons[j1, i1], lons[j1, i0]]
+            cx, cy = m(clon, clat)
+            polys.append(Polygon(list(zip(cx, cy)), closed=True))
+        if polys:
+            pc = PatchCollection(polys, facecolor='none',
+                                 edgecolor=edge_color, linewidth=1.0,
+                                 alpha=0.85, zorder=5)
+            ax.add_collection(pc)
 
-    pc = PatchCollection(polys, facecolor='none',
-                          edgecolor='black', linewidth=0.9, alpha=0.80,
-                          zorder=5)
-    ax.add_collection(pc)
-
-    # Also mark patch centres for clarity
+    # Mark patch centres
     if len(j_sel):
         cx_cen, cy_cen = m(lons[j_sel, i_sel], lats[j_sel, i_sel])
         ax.plot(cx_cen, cy_cen, 'k.', markersize=2.5, zorder=6, alpha=0.7)
+
+    # Simple legend
+    from matplotlib.lines import Line2D
+    legend_handles = [
+        Line2D([0], [0], color='#0044CC', lw=1.5, label='Wet patch (mean≥0.1 mm)'),
+        Line2D([0], [0], color='#CC2200', lw=1.5, label='Dry patch (mean<0.1 mm)'),
+    ]
+    ax.legend(handles=legend_handles, loc='lower left', fontsize=11,
+              framealpha=0.7, edgecolor='gray')
 
     outfile = f"patch_selection_{cyyyymmddhh}_{clead}h.png"
     fig.savefig(outfile, dpi=200)
