@@ -13,7 +13,7 @@ This will compute BS, reliability for GRAF raw Gaussian-convolved probabilities.
 
 """
 
-import os, sys, subprocess
+import os, sys
 import numpy as np
 import numpy.ma as ma
 import matplotlib.pyplot as plt
@@ -210,7 +210,7 @@ nsigmas = len(sigmas)
 cmonths = ['Jan','Feb','Mar','Apr','May','Jun','Jul',\
     'Aug','Sep','Oct','Nov','Dec']
 cyyyymmddhh_list = [d for d in daterange(cyyyymmddhh_begin,
-    cyyyymmddhh_end, 6) if int(d[8:10]) in [0, 6, 12, 18]]
+    cyyyymmddhh_end, 12) if int(d[8:10]) in [0, 12]]
 
 # --- config file read for directory names.
 
@@ -266,20 +266,6 @@ if not cache_loaded:
         input_file = input_directory + cmodel_in + \
             '_1h_probs_multisigma_IC' + \
             date + '_lead' + clead + 'h.nc'
-
-        # --- Generate the prob file on the fly if it doesn't exist yet.
-
-        if not os.path.exists(input_file):
-            print(f'  Prob file missing; generating via '
-                  f'save_graf_convolve_multilen.py ...')
-            gen_script = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                'save_graf_convolve_multilen.py')
-            result = subprocess.run(
-                [sys.executable, gen_script, date, clead])
-            if result.returncode != 0 or not os.path.exists(input_file):
-                print(f'  Generation failed; skipping {date}')
-                continue
 
         ny, nx, lats, lons, p0p25mm_raw, p1mm_raw, p5mm_raw, \
             p10mm_raw, sigmas, nsigmas = read_probs(input_file)
