@@ -10,15 +10,8 @@ cyyyymmddhh_end = sys.argv[2]
 
 date_list = daterange(cyyyymmddhh_begin, cyyyymmddhh_end, 12)
 for idate, date in enumerate(date_list):
-    cmd = 'python resunet_inference_gamma_mixture_optimized.py '+date+' 6'
-    print (cmd)
-    istat = os.system(cmd)
-    cmd = 'python resunet_inference_gamma_mixture_optimized.py '+date+' 12'
-    istat = os.system(cmd)
-    cmd = 'python resunet_inference_gamma_mixture_optimized.py '+date+' 24'
-    istat = os.system(cmd)
-    cmd = 'python resunet_inference_gamma_mixture_optimized.py '+date+' 36'
-    istat = os.system(cmd)
-    cmd = 'python resunet_inference_gamma_mixture_optimized.py '+date+' 48'
-    istat = os.system(cmd)
+    for ilead in range (48, 49):   # 1 to 48 previously
+        clead = str(ilead)
+        cmd = 'python resunet_inference_gamma_mixture_optimized.py '+date+' '+clead
+        istat = os.system(cmd)
 

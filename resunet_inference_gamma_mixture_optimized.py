@@ -980,6 +980,7 @@ if __name__ == '__main__':
             print(f"Inference-only time: {inference_time:.2f} seconds")
 
             # Print summary statistics for mixture model
+            """
             print(f"\nSummary statistics:")
             print(f"  Fraction zero: mean={np.mean(fraction_zero):.3f}, "
                   f"min={np.min(fraction_zero):.3f}, max={np.max(fraction_zero):.3f}")
@@ -1002,6 +1003,7 @@ if __name__ == '__main__':
             mixture_mean = (weight_params * mean1 + (1 - weight_params) * mean2)
             print(f"  Mixture mean|wet: mean={np.mean(mixture_mean):.3f} mm, "
                   f"max={np.max(mixture_mean):.3f} mm")
+            """
 
         else:
             print("Model load failed.")

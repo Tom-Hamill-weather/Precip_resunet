@@ -14,5 +14,5 @@ import os, sys
 samples = list(range(0,5000,100))
 for isample in samples:
     cmd = 'python plot_graf_mrms_gfs_samples.py '+\
-        '../resnet_data/GRAF_Unet_data_train_2025120100_12h.cPick '+str(isample)
+        '/data/resnet_data/patch_data/GRAF_Unet_data_train_2025120100_12h.nc '+str(isample)
     istat = os.system(cmd)

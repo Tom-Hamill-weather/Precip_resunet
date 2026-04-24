@@ -13,8 +13,8 @@ for ilead in range(1,49):
     print (cmd)
     istat = os.system(cmd)
     
-    cmd = 'python make_plots_gamma.py '+cyyyymmddhh+' '+clead
-    print (cmd)
-    istat = os.system(cmd)
+    #cmd = 'python make_plots_gamma.py '+cyyyymmddhh+' '+clead
+    #print (cmd)
+    #istat = os.system(cmd)
     
     
