@@ -2,22 +2,32 @@
 # control_save_patched_GRAF_MRMS_GFS2.sh
 #
 # Runs save_patched_GRAF_MRMS_GFS2.py for 4 seasons × 16 lead times in parallel.
-# NJOBS controls the sliding-window concurrency limit.  Each job peaks at roughly
-# 3-4 GB RAM; with 26 GB available on the G5 instance, 4 concurrent jobs is safe.
-# Raise to 6 if jobs turn out to be lighter than expected.
+# NJOBS controls the sliding-window concurrency limit.  Each job now flushes
+# patches to disk after every date, so peak RAM is ~300 MB per job regardless
+# of how many patches accumulate.  The binding constraint is CPU (one Python
+# process ≈ one vCPU for grib decompression + zlib compression).  On the 8-vCPU
+# G5 instance, 6 leaves two vCPUs free for I/O and OS overhead.
 
-NJOBS=4
+NJOBS=6
 
 DATES="2025120100 2025090100 2025060100 2025030100"
 LEADS="3 6 9 12 15 18 21 24 27 30 33 36 39 42 45 48"
 
 TOTAL_JOBS=$(echo $DATES | wc -w)
 TOTAL_JOBS=$(( TOTAL_JOBS * $(echo $LEADS | wc -w) ))
-DONE_COUNT=0
 
-# Throttle: block until fewer than NJOBS background jobs are running
+# PID-based semaphore — avoids pgrep race condition where multiple jobs can
+# slip through between fork() and the process appearing in the process table.
+declare -a RUNNING_PIDS=()
+
 throttle() {
-    while [ "$(jobs -rp | wc -l)" -ge "$NJOBS" ]; do
+    while true; do
+        local alive=()
+        for pid in "${RUNNING_PIDS[@]}"; do
+            kill -0 "$pid" 2>/dev/null && alive+=("$pid")
+        done
+        RUNNING_PIDS=("${alive[@]}")
+        [ "${#RUNNING_PIDS[@]}" -lt "$NJOBS" ] && break
         sleep 5
     done
 }
@@ -28,7 +38,7 @@ ticker() {
     while true; do
         sleep 60
         local n_running
-        n_running=$(jobs -rp | wc -l)
+        n_running=$(pgrep -f 'save_patched_GRAF_MRMS_GFS2\.py' | wc -l)
         local n_done
         n_done=$(grep -rl "Final patch counts" log_patches_*.txt 2>/dev/null | wc -l)
         local n_failed
@@ -58,6 +68,7 @@ for date in $DATES; do
                 echo "[$(date '+%H:%M:%S')] FAILED   $date  lead=${lead}h  (rc=$rc) — see $logfile"
             fi
         ) &
+        RUNNING_PIDS+=($!)
     done
 done
 

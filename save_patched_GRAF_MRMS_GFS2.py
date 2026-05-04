@@ -24,6 +24,8 @@ Purpose:
 import os
 import sys
 import warnings
+import multiprocessing
+from multiprocessing import Pool
 import _pickle as cPickle
 from datetime import datetime
 from configparser import ConfigParser
@@ -107,8 +109,12 @@ class GRAFDataProcessor:
         full_path = os.path.join(input_dir, filename)
         return full_path, cyyyymmdd_fcst, chh_fcst
 
-    def read_grib_precip(self, grib_path, end_step):
-        """Reads precipitation from GRIB2 file."""
+    def read_grib_precip(self, grib_path, end_step, compute_latlons=True):
+        """Reads precipitation from GRIB2 file.
+
+        compute_latlons: set False to skip grb.latlons() when the caller already
+        has the grid cached (all GRAF files share the same CONUS@4km projection).
+        """
         if not os.path.exists(grib_path):
             print(f'  WARNING: File not found: {grib_path}')
             return -1, None, None, None, None
@@ -121,7 +127,7 @@ class GRAFDataProcessor:
                     return -1, None, None, None, None
 
                 grb = grb_msgs[0]
-                lats, lons = grb.latlons()
+                lats, lons = (grb.latlons() if compute_latlons else (None, None))
                 precip = grb.values
                 precip = np.where(precip > 75., 75.0, precip)
 
@@ -275,35 +281,26 @@ class GRAFDataProcessor:
             fill_value=0.0
         )
 
-        # Extract patches
-        patches = []
-        r = 48  # Half-width of 96x96 patch
-
-        for jy, ix in zip(j_indices, i_indices):
+        # Gather all patch lat/lon points into one array, then call each
+        # interpolator once instead of once-per-patch.
+        n_patches = len(j_indices)
+        r = 48
+        all_lats = np.empty((n_patches, 96, 96), dtype=np.float64)
+        all_lons = np.empty((n_patches, 96, 96), dtype=np.float64)
+        for k, (jy, ix) in enumerate(zip(j_indices, i_indices)):
             y_sl, x_sl = slice(jy - r, jy + r), slice(ix - r, ix + r)
+            all_lats[k] = graf_lats[y_sl, x_sl]
+            lp = graf_lons[y_sl, x_sl]
+            all_lons[k] = np.where(lp < 0, lp + 360, lp)  # −180:180 → 0:360
 
-            # Get lat/lon for this patch
-            patch_lats = graf_lats[y_sl, x_sl]
-            patch_lons = graf_lons[y_sl, x_sl]
+        points = np.column_stack([all_lats.ravel(), all_lons.ravel()])  # (N×9216, 2)
 
-            # Convert GRAF lons from -180:180 to 0:360 for GFS
-            patch_lons_360 = np.where(patch_lons < 0, patch_lons + 360, patch_lons)
+        all_pwat = interp_pwat(points).reshape(n_patches, 96, 96).astype(np.float32)
+        all_r    = interp_r(points).reshape(n_patches, 96, 96).astype(np.float32)
+        all_cape = interp_cape(points).reshape(n_patches, 96, 96).astype(np.float32)
 
-            # Create points for interpolation (flatten)
-            points = np.column_stack([patch_lats.ravel(), patch_lons_360.ravel()])
-
-            # Interpolate each variable
-            pwat_patch = interp_pwat(points).reshape(96, 96).astype(np.float32)
-            r_patch = interp_r(points).reshape(96, 96).astype(np.float32)
-            cape_patch = interp_cape(points).reshape(96, 96).astype(np.float32)
-
-            patches.append({
-                'pwat': pwat_patch,
-                'r': r_patch,
-                'cape': cape_patch
-            })
-
-        return patches
+        return [{'pwat': all_pwat[k], 'r': all_r[k], 'cape': all_cape[k]}
+                for k in range(n_patches)]
 
     def read_terrain(self):
         """Reads static terrain data."""
@@ -394,98 +391,144 @@ class GRAFDataProcessor:
 
 # ----------------------------------------------------------------
 
-def save_dataset(filename, data_dict):
-    """
-    Save data dictionary to compressed NetCDF4 format.
-    Saves ~73% disk space compared to pickle (3.72x compression).
-    """
-    # Change extension from .cPick to .nc
+_NC_FLOAT_VARS = ['GRAF', 'MRMS', 'MRMS_qual', 'terrain_diff', 'dt_dlon', 'dt_dlat',
+                  'GFS_pwat', 'GFS_r', 'GFS_cape']
+
+def _nc_filename(filename):
     if filename.endswith('.cPick'):
-        filename = filename.replace('.cPick', '.nc')
-    elif not filename.endswith('.nc'):
-        filename = filename + '.nc'
+        return filename.replace('.cPick', '.nc')
+    return filename if filename.endswith('.nc') else filename + '.nc'
 
-    print(f'INFO: Writing compressed NetCDF {filename}...')
 
-    # Stack lists into arrays
-    arrays = {}
-    for key in ['GRAF', 'MRMS', 'MRMS_qual', 'terrain_diff', 'dt_dlon', 'dt_dlat',
-                'GFS_pwat', 'GFS_r', 'GFS_cape']:
-        if len(data_dict[key]) > 0:
-            arrays[key] = np.stack(data_dict[key], axis=0)
-        else:
-            arrays[key] = np.empty((0, 96, 96), dtype=np.float32)
-
-    npatches = len(arrays['GRAF']) if len(arrays['GRAF']) > 0 else 0
-
-    if npatches == 0:
-        print(f'WARNING: No patches to save!')
-        return
-
-    ny, nx = 96, 96
-
-    # Create NetCDF4 file with compression
+def open_nc_file(filename):
+    """Open a new NetCDF4 file for incremental patch appending."""
+    filename = _nc_filename(filename)
+    from datetime import datetime
     nc = Dataset(filename, 'w', format='NETCDF4')
-
-    # Dimensions
-    nc.createDimension('patch', npatches)
-    nc.createDimension('y', ny)
-    nc.createDimension('x', nx)
+    nc.createDimension('patch', None)   # unlimited — grows as patches are flushed
+    nc.createDimension('y', 96)
+    nc.createDimension('x', 96)
     nc.createDimension('time_str_len', 10)
 
-    # Compression settings
-    comp = {'zlib': True, 'complevel': 4, 'shuffle': True}
-    chunks = (1, ny, nx)
+    comp = {'zlib': True, 'complevel': 1, 'shuffle': True}
+    chunks = (1, 96, 96)
+    for var in _NC_FLOAT_VARS:
+        nc.createVariable(var, 'f4', ('patch', 'y', 'x'), chunksizes=chunks, **comp)
+    nc.createVariable('init_times',  'S1', ('patch', 'time_str_len'))
+    nc.createVariable('valid_times', 'S1', ('patch', 'time_str_len'))
 
-    # Create variables
-    nc_graf = nc.createVariable('GRAF', 'f4', ('patch', 'y', 'x'), chunksizes=chunks, **comp)
-    nc_mrms = nc.createVariable('MRMS', 'f4', ('patch', 'y', 'x'), chunksizes=chunks, **comp)
-    nc_mrms_qual = nc.createVariable('MRMS_qual', 'f4', ('patch', 'y', 'x'), chunksizes=chunks, **comp)
-    nc_terdiff = nc.createVariable('terrain_diff', 'f4', ('patch', 'y', 'x'), chunksizes=chunks, **comp)
-    nc_dlon = nc.createVariable('dt_dlon', 'f4', ('patch', 'y', 'x'), chunksizes=chunks, **comp)
-    nc_dlat = nc.createVariable('dt_dlat', 'f4', ('patch', 'y', 'x'), chunksizes=chunks, **comp)
-    nc_pwat = nc.createVariable('GFS_pwat', 'f4', ('patch', 'y', 'x'), chunksizes=chunks, **comp)
-    nc_r = nc.createVariable('GFS_r', 'f4', ('patch', 'y', 'x'), chunksizes=chunks, **comp)
-    nc_cape = nc.createVariable('GFS_cape', 'f4', ('patch', 'y', 'x'), chunksizes=chunks, **comp)
-    nc_init = nc.createVariable('init_times', 'S1', ('patch', 'time_str_len'))
-    nc_valid = nc.createVariable('valid_times', 'S1', ('patch', 'time_str_len'))
+    nc.description = 'Training patches with GRAF, MRMS, terrain, and GFS data'
+    nc.history     = f'Created on {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
+    nc.patch_size  = '96x96'
+    nc.format      = 'NetCDF4 with zlib compression (level 4)'
+    nc.variables['GRAF'].units            = 'mm';       nc.variables['GRAF'].long_name           = 'GRAF precipitation forecast'
+    nc.variables['MRMS'].units            = 'mm';       nc.variables['MRMS'].long_name           = 'MRMS precipitation analysis'
+    nc.variables['MRMS_qual'].long_name   = 'MRMS data quality'
+    nc.variables['terrain_diff'].units    = 'm';        nc.variables['terrain_diff'].long_name   = 'Local terrain height difference'
+    nc.variables['GFS_pwat'].units        = 'kg m-2';   nc.variables['GFS_pwat'].long_name       = 'GFS precipitable water'
+    nc.variables['GFS_r'].units           = '%';        nc.variables['GFS_r'].long_name          = 'GFS column-average relative humidity'
+    nc.variables['GFS_cape'].units        = 'J kg-1';   nc.variables['GFS_cape'].long_name       = 'GFS CAPE'
+    return nc
 
-    # Add metadata
-    from datetime import datetime
-    nc.description = f'Training patches with GRAF, MRMS, terrain, and GFS data'
-    nc.history = f'Created on {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
-    nc.patch_size = f'{ny}x{nx}'
-    nc.format = 'NetCDF4 with zlib compression (level 4)'
 
-    nc_graf.units = 'mm'; nc_graf.long_name = 'GRAF precipitation forecast'
-    nc_mrms.units = 'mm'; nc_mrms.long_name = 'MRMS precipitation analysis'
-    nc_mrms_qual.long_name = 'MRMS data quality'
-    nc_terdiff.units = 'm'; nc_terdiff.long_name = 'Local terrain height difference'
-    nc_pwat.units = 'kg m-2'; nc_pwat.long_name = 'GFS precipitable water'
-    nc_r.units = '%'; nc_r.long_name = 'GFS column-average relative humidity'
-    nc_cape.units = 'J kg-1'; nc_cape.long_name = 'GFS CAPE'
+def flush_to_nc(nc, batch):
+    """Append one date's worth of patches to an open NetCDF4 file."""
+    n = len(batch['GRAF'])
+    if n == 0:
+        return
+    start = len(nc.dimensions['patch'])
+    for var in _NC_FLOAT_VARS:
+        nc.variables[var][start:start + n] = np.stack(batch[var])
+    for i, (init_t, valid_t) in enumerate(zip(batch['init_times'], batch['valid_times'])):
+        nc.variables['init_times'][start + i]  = list(init_t[:10])
+        nc.variables['valid_times'][start + i] = list(valid_t[:10])
 
-    # Write data
-    nc_graf[:] = arrays['GRAF']
-    nc_mrms[:] = arrays['MRMS']
-    nc_mrms_qual[:] = arrays['MRMS_qual']
-    nc_terdiff[:] = arrays['terrain_diff']
-    nc_dlon[:] = arrays['dt_dlon']
-    nc_dlat[:] = arrays['dt_dlat']
-    nc_pwat[:] = arrays['GFS_pwat']
-    nc_r[:] = arrays['GFS_r']
-    nc_cape[:] = arrays['GFS_cape']
+# ----------------------------------------------------------------
 
-    # Write timestamps
-    for i, (init_time, valid_time) in enumerate(zip(data_dict['init_times'], data_dict['valid_times'])):
-        nc_init[i] = list(init_time[:10])
-        nc_valid[i] = list(valid_time[:10])
+# ----------------------------------------------------------------
+# Parallelisation support
+# ----------------------------------------------------------------
 
-    nc.close()
+_BATCH_KEYS = ['GRAF', 'MRMS', 'MRMS_qual', 'terrain_diff', 'dt_dlon', 'dt_dlat',
+               'init_times', 'valid_times', 'GFS_pwat', 'GFS_r', 'GFS_cape']
 
-    # Report size
-    file_size_mb = os.path.getsize(filename) / 1024**2
-    print(f'INFO: Done writing {filename} ({file_size_mb:.1f} MB, ~73% smaller than pickle)')
+# Per-worker-process globals set by _worker_init (fork-safe on Linux).
+_W_PROCESSOR = None   # GRAFDataProcessor instance
+_W_TERRAIN   = None   # (terrain_diff, dt_dlon, dt_dlat) tuple
+_W_LATLONS   = None   # (lats, lons) cached after first GRIB read
+
+
+def _worker_init(config_file):
+    """Runs once in each worker process at Pool creation."""
+    global _W_PROCESSOR, _W_TERRAIN, _W_LATLONS
+    warnings.filterwarnings("ignore")
+    _W_PROCESSOR = GRAFDataProcessor(config_file)
+    _W_TERRAIN   = _W_PROCESSOR.read_terrain()
+    _W_LATLONS   = None
+
+
+def _process_date(args):
+    """
+    Process one date: read inputs, select patches, interpolate GFS.
+    Returns (idate, bucket_name, batch_dict) or None on any failure.
+    Called in worker processes via Pool.imap.
+    """
+    global _W_PROCESSOR, _W_TERRAIN, _W_LATLONS
+    idate, date, clead = args
+    processor                          = _W_PROCESSOR
+    terrain_diff, terr_dlon, terr_dlat = _W_TERRAIN
+
+    cyyyymmddhh_valid = dateshift(date, int(clead))
+
+    # Read GRAF precipitation; skip expensive latlons() after first date
+    # because all GRAF files share the same CONUS@4km grid.
+    graf_file, _, _ = processor.get_filenames(date, clead)
+    need_ll = (_W_LATLONS is None)
+    istat, precip_graf, lats, lons, _ = processor.read_grib_precip(
+        graf_file, int(clead), compute_latlons=need_ll)
+    if istat != 0:
+        return None
+    if need_ll:
+        _W_LATLONS = (lats, lons)
+    lats, lons = _W_LATLONS
+
+    istat, precip_mrms, quality_mrms = processor.read_mrms(cyyyymmddhh_valid)
+    if istat != 0:
+        return None
+
+    istat, gfs_data = processor.read_gfs(date, clead)
+    if istat != 0:
+        return None
+
+    j_indices, i_indices = processor.select_patches_nonoverlapping(
+        precip_graf, quality_mrms, lats.shape[0], lats.shape[1], date)
+    if len(j_indices) == 0:
+        return None
+
+    gfs_patches = processor.interpolate_gfs_to_patches(
+        gfs_data, lats, lons, j_indices, i_indices)
+
+    irem = idate % 10
+    bucket = 'train' if irem >= 2 else ('val' if irem == 1 else 'pred')
+
+    r = 48
+    batch = {k: [] for k in _BATCH_KEYS}
+    for idx, (jy, ix) in enumerate(zip(j_indices, i_indices)):
+        y_sl, x_sl = slice(jy - r, jy + r), slice(ix - r, ix + r)
+        batch['GRAF'].append(precip_graf[y_sl, x_sl].astype(np.float32))
+        batch['MRMS'].append(precip_mrms[y_sl, x_sl].astype(np.float32))
+        batch['MRMS_qual'].append(quality_mrms[y_sl, x_sl].astype(np.float32))
+        batch['terrain_diff'].append(terrain_diff[y_sl, x_sl].astype(np.float32))
+        batch['dt_dlon'].append(terr_dlon[y_sl, x_sl].astype(np.float32))
+        batch['dt_dlat'].append(terr_dlat[y_sl, x_sl].astype(np.float32))
+        batch['init_times'].append(date)
+        batch['valid_times'].append(cyyyymmddhh_valid)
+        batch['GFS_pwat'].append(gfs_patches[idx]['pwat'])
+        batch['GFS_r'].append(gfs_patches[idx]['r'])
+        batch['GFS_cape'].append(gfs_patches[idx]['cape'])
+
+    return idate, bucket, batch
+
 
 # ----------------------------------------------------------------
 
@@ -534,92 +577,50 @@ def main():
 
     print(f'INFO: Processing {len(date_list)} dates for init={cyyyymmddhh} lead={clead}h')
 
-    # Buckets initialized with time-stamp lists and GFS data lists
-    buckets = {
-        'train': {k: [] for k in ['GRAF', 'MRMS', 'MRMS_qual', 'terdiff_x_GRAF',
-                                  'terrain_diff', 'dt_dlon', 'dt_dlat',
-                                  'init_times', 'valid_times',
-                                  'GFS_pwat', 'GFS_r', 'GFS_cape']},
-        'val':   {k: [] for k in ['GRAF', 'MRMS', 'MRMS_qual', 'terdiff_x_GRAF',
-                                  'terrain_diff', 'dt_dlon', 'dt_dlat',
-                                  'init_times', 'valid_times',
-                                  'GFS_pwat', 'GFS_r', 'GFS_cape']},
-        'pred':  {k: [] for k in ['GRAF', 'MRMS', 'MRMS_qual', 'terdiff_x_GRAF',
-                                  'terrain_diff', 'dt_dlon', 'dt_dlat',
-                                  'init_times', 'valid_times',
-                                  'GFS_pwat', 'GFS_r', 'GFS_cape']}
-    }
-
-    terrain_diff, terr_dlon, terr_dlat = processor.read_terrain()
-
-    ndates_ok = 0
-    for idate, date in enumerate(date_list):
-        if idate % 50 == 0:
-            n_train = len(buckets['train']['GRAF'])
-            n_val   = len(buckets['val']['GRAF'])
-            n_pred  = len(buckets['pred']['GRAF'])
-            print(f'INFO: Date {idate+1}/{len(date_list)} ({date})  '
-                  f'patches so far: train={n_train} val={n_val} pred={n_pred}')
-
-        cyyyymmddhh_valid = dateshift(date, int(clead))
-        graf_file, _, _ = processor.get_filenames(date, clead)
-        istat_graf, precip_graf, lats, lons, _ = processor.read_grib_precip(graf_file, int(clead))
-        if istat_graf != 0: continue
-
-        istat_mrms, precip_mrms, quality_mrms = processor.read_mrms(cyyyymmddhh_valid)
-        if istat_mrms != 0: continue
-
-        # Read GFS data
-        istat_gfs, gfs_data = processor.read_gfs(date, clead)
-        if istat_gfs != 0:
-            print(f'  WARNING: Skipping date {date} due to missing GFS data')
-            continue
-
-        j_indices, i_indices = processor.select_patches_nonoverlapping(
-            precip_graf, quality_mrms, lats.shape[0], lats.shape[1], date)
-
-        if len(j_indices) == 0:
-            continue
-
-        ndates_ok += 1
-
-        # Interpolate GFS to patches
-        gfs_patches = processor.interpolate_gfs_to_patches(gfs_data, lats, lons, j_indices, i_indices)
-
-        irem = idate % 10
-        target_bucket = buckets['train'] if irem >= 2 else (buckets['val'] if irem == 1 else buckets['pred'])
-
-        r = 48
-        for idx, (jy, ix) in enumerate(zip(j_indices, i_indices)):
-            y_sl, x_sl = slice(jy - r, jy + r), slice(ix - r, ix + r)
-            target_bucket['GRAF'].append(precip_graf[y_sl, x_sl].astype(np.float32))
-            target_bucket['MRMS'].append(precip_mrms[y_sl, x_sl].astype(np.float32))
-            target_bucket['MRMS_qual'].append(quality_mrms[y_sl, x_sl].astype(np.float32))
-            target_bucket['terdiff_x_GRAF'].append(terrain_diff[y_sl, x_sl] * precip_graf[y_sl, x_sl])
-            target_bucket['terrain_diff'].append(terrain_diff[y_sl, x_sl].astype(np.float32))
-            target_bucket['dt_dlon'].append(terr_dlon[y_sl, x_sl].astype(np.float32))
-            target_bucket['dt_dlat'].append(terr_dlat[y_sl, x_sl].astype(np.float32))
-            # Appending time stamps for each patch
-            target_bucket['init_times'].append(date)
-            target_bucket['valid_times'].append(cyyyymmddhh_valid)
-            # Append GFS patches
-            target_bucket['GFS_pwat'].append(gfs_patches[idx]['pwat'])
-            target_bucket['GFS_r'].append(gfs_patches[idx]['r'])
-            target_bucket['GFS_cape'].append(gfs_patches[idx]['cape'])
-
-        import gc; gc.collect()
-
-    print(f'INFO: Loop complete. {ndates_ok}/{len(date_list)} dates yielded patches.')
-    print(f'INFO: Final patch counts: train={len(buckets["train"]["GRAF"])} '
-          f'val={len(buckets["val"]["GRAF"])} pred={len(buckets["pred"]["GRAF"])}')
-
     # Determine subdirectory: patch_data on G5 GPU, trainings elsewhere
     subdirectory = 'patch_data' if processor.aws_base_path == '/data/resnet_data' else 'trainings'
     base_path = os.path.join(processor.dirs.get("resnet_data_directory", "../resnet_data"), subdirectory)
     os.makedirs(base_path, exist_ok=True)
-    save_dataset(f'{base_path}/GRAF_Unet_data_train_{cyyyymmddhh}_{clead}h.cPick', buckets['train'])
-    save_dataset(f'{base_path}/GRAF_Unet_data_test_{cyyyymmddhh}_{clead}h.cPick', buckets['val'])
-    save_dataset(f'{base_path}/GRAF_Unet_data_predict_{cyyyymmddhh}_{clead}h.cPick', buckets['pred'])
+
+    # Open output files up front with unlimited patch dimension so we can flush
+    # each date's patches immediately instead of accumulating everything in RAM.
+    nc_files = {
+        'train': open_nc_file(f'{base_path}/GRAF_Unet_data_train_{cyyyymmddhh}_{clead}h.cPick'),
+        'val':   open_nc_file(f'{base_path}/GRAF_Unet_data_test_{cyyyymmddhh}_{clead}h.cPick'),
+        'pred':  open_nc_file(f'{base_path}/GRAF_Unet_data_predict_{cyyyymmddhh}_{clead}h.cPick'),
+    }
+
+    n_workers = max(1, multiprocessing.cpu_count() - 2)
+    args_list = [(idate, date, clead) for idate, date in enumerate(date_list)]
+    print(f'INFO: Using {n_workers} parallel workers')
+
+    ndates_ok = 0
+    with Pool(processes=n_workers,
+              initializer=_worker_init,
+              initargs=(config_file,)) as pool:
+        for idx, result in enumerate(pool.imap(_process_date, args_list, chunksize=1)):
+            if idx % 50 == 0:
+                n_train = len(nc_files['train'].dimensions['patch'])
+                n_val   = len(nc_files['val'].dimensions['patch'])
+                n_pred  = len(nc_files['pred'].dimensions['patch'])
+                print(f'INFO: Date {idx+1}/{len(date_list)}  '
+                      f'patches so far: train={n_train} val={n_val} pred={n_pred}')
+            if result is None:
+                continue
+            _, bucket_name, batch = result
+            flush_to_nc(nc_files[bucket_name], batch)
+            ndates_ok += 1
+
+    print(f'INFO: Loop complete. {ndates_ok}/{len(date_list)} dates yielded patches.')
+
+    counts = {}
+    for name, nc in nc_files.items():
+        counts[name] = len(nc.dimensions['patch'])
+        filename = nc.filepath()
+        nc.close()
+        size_mb = os.path.getsize(filename) / 1024**2
+        print(f'INFO: Done writing {filename} ({size_mb:.1f} MB)')
+    print(f'INFO: Final patch counts: train={counts["train"]} val={counts["val"]} pred={counts["pred"]}')
 
 if __name__ == "__main__":
     main()

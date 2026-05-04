@@ -318,7 +318,7 @@ def write_to_netCDF(outfile, ny, nx, nsigma, lons, lats, \
 
 # =======================================================
 
-config_file = "../ini/config_hdo.ini"
+config_file = "config_hdo.ini"
 directory_object_name = 'DIRECTORIES'
 GRAFdatadir_fixedfield = \
     read_config_file(config_file, directory_object_name)
@@ -392,17 +392,18 @@ istat = write_to_netCDF(outfile, ny, nx, nsigma, lons, lats, \
 
 # ---- make plots if desired.
 
-plotit = False
+plotit = True
 if plotit == True:
     print ('setting up plotting.')
     colorst = ['White','#E4FFFF','#C4E8FF',\
         '#8FB3FF','#D8F9D8','#A6ECA6','#42F742',\
         'Yellow','Gold','Orange','#FCD5D9','#F6A3AE',\
         '#FA5257','Orchid','#AD8ADB','#A449FF','LightGray']
-    latb = 20.0
+    latb = 35 # 20.0
     late = 53.0
     lonb = -123.0
-    lone = -60.0
+    lone = -103 # -60.0
+    
     m = Basemap(rsphere=(6378137.00,6356752.3142),\
         resolution='l',area_thresh=1000.,projection='lcc',\
         lat_1=35.,lat_2=45,lat_0=40.,lon_0=-100., \

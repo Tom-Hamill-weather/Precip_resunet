@@ -140,13 +140,15 @@ if DEVICE.type == 'cpu':
     BATCH_SIZE = 16
     NUM_WORKERS = 0
     USE_AMP = False
+    AMP_DTYPE = torch.float32
 else:
-    BATCH_SIZE = 16
-    NUM_WORKERS = 2
-    USE_AMP = False  # Disabled: causes numerical instability with log/lgamma operations
+    BATCH_SIZE = 128  # L4 has 23 GB; batch=128 direct is faster than 16×8 accumulation
+    NUM_WORKERS = 6
+    USE_AMP = True
+    AMP_DTYPE = torch.bfloat16  # bfloat16: same dynamic range as float32, avoids lgamma overflow
 
-# Gradient accumulation to simulate larger effective batch size
-ACCUMULATION_STEPS = 8  # Effective batch size = 16 * 8 = 128
+# No gradient accumulation needed: batch=128 fits directly on the L4 GPU
+ACCUMULATION_STEPS = 1
 
 # --- 3. Training Hyperparameters ---
 
@@ -600,14 +602,19 @@ class GRAF_Dataset(Dataset):
         else:
             self.stats = normalization_stats
 
-        # Normalize all features
-        self.graf = self.normalize(self.graf, 0)
-        self.diff = self.normalize(self.diff, 1)
-        self.gfs_r = self.normalize(self.gfs_r, 2)
-        self.terdiff_graf = self.normalize(self.terdiff_graf, 3)
+        # Normalize all features, pre-stack into (N, 7, H, W), then free individual arrays
+        self.graf              = self.normalize(self.graf, 0)
+        self.diff              = self.normalize(self.diff, 1)
+        self.gfs_r             = self.normalize(self.gfs_r, 2)
+        self.terdiff_graf      = self.normalize(self.terdiff_graf, 3)
         self.graf_rh_interaction = self.normalize(self.graf_rh_interaction, 4)
-        self.dlon = self.normalize(self.dlon, 5)
-        self.dlat = self.normalize(self.dlat, 6)
+        self.dlon              = self.normalize(self.dlon, 5)
+        self.dlat              = self.normalize(self.dlat, 6)
+        self.features = np.stack(
+            [self.graf, self.diff, self.gfs_r, self.terdiff_graf,
+             self.graf_rh_interaction, self.dlon, self.dlat], axis=1
+        ).astype(np.float32)  # (N, 7, 96, 96)
+        del self.graf, self.diff, self.gfs_r, self.terdiff_graf, self.graf_rh_interaction, self.dlon, self.dlat
 
     def normalize(self, data, idx):
         vmin = self.stats['min'][idx]
@@ -616,7 +623,7 @@ class GRAF_Dataset(Dataset):
         return ((data - vmin) / denom).astype(np.float32)
 
     def __len__(self):
-        return len(self.graf)
+        return len(self.features)
 
     def apply_augmentation(self, x, y):
         # Horizontal flip (negate dlon channel 5)
@@ -630,10 +637,7 @@ class GRAF_Dataset(Dataset):
         return x.copy(), y.copy()
 
     def __getitem__(self, idx):
-        # Stack in order: GRAF, diff, RH, GRAF×diff, GRAF×RH, dlon, dlat
-        x = np.stack([self.graf[idx], self.diff[idx], self.gfs_r[idx],
-                     self.terdiff_graf[idx], self.graf_rh_interaction[idx],
-                     self.dlon[idx], self.dlat[idx]], axis=0)
+        x = self.features[idx].copy()  # (7, 96, 96) — copy avoids writing into the shared array
 
         # Return continuous MRMS values (not class indices)
         y_raw = self.mrms[idx]
@@ -1113,10 +1117,13 @@ def train_model(date_str, lead_time_str):
     climatology = compute_gamma_mixture_climatology(train_dataset)
 
     # Create dataloaders
+    pin = (DEVICE.type != 'cpu')
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE,
-                              shuffle=True, num_workers=NUM_WORKERS)
+                              shuffle=True, num_workers=NUM_WORKERS,
+                              pin_memory=pin, persistent_workers=False)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE,
-                           shuffle=False, num_workers=NUM_WORKERS)
+                            shuffle=False, num_workers=NUM_WORKERS,
+                            pin_memory=pin, persistent_workers=False)
 
     # Create model with 6 outputs
     model = AttnResUNet(in_channels=7, num_outputs=6).to(DEVICE)
@@ -1142,7 +1149,7 @@ def train_model(date_str, lead_time_str):
         optimizer, mode='min', factor=0.7, patience=2
     )
 
-    scaler = GradScaler() if USE_AMP else None
+    scaler = None  # bfloat16 has full float32 dynamic range; no GradScaler needed
 
     # Setup checkpoint saving
     start_epoch = 0
@@ -1188,12 +1195,11 @@ def train_model(date_str, lead_time_str):
         for batch_idx, (data, target) in enumerate(train_loader):
             data, target = data.to(DEVICE), target.to(DEVICE)
 
-            # Forward pass
-            amp_device = 'cuda' if USE_AMP else 'cpu'
-            with torch.amp.autocast(amp_device, enabled=USE_AMP):
+            # Forward pass: conv layers run in bfloat16; loss in float32
+            # (lgamma/log in the NLL loss needs float32 precision)
+            with torch.amp.autocast('cuda', dtype=AMP_DTYPE, enabled=USE_AMP):
                 output = model(data)
-                loss = criterion(output, target)
-                loss = loss / ACCUMULATION_STEPS
+            loss = criterion(output.float(), target) / ACCUMULATION_STEPS
 
             # Backward pass
             if USE_AMP and scaler is not None:
@@ -1223,7 +1229,7 @@ def train_model(date_str, lead_time_str):
             if batch_idx == 0:
                 print_diagnostics(
                     epoch, batch_idx, loss.item() * ACCUMULATION_STEPS,
-                    output, target,
+                    output.float(), target,
                     climatology['shape_min'], climatology['scale_min'],
                     model, train_dataset.stats
                 )
@@ -1236,10 +1242,9 @@ def train_model(date_str, lead_time_str):
         with torch.no_grad():
             for data, target in val_loader:
                 data, target = data.to(DEVICE), target.to(DEVICE)
-                amp_device = 'cuda' if USE_AMP else 'cpu'
-                with torch.amp.autocast(amp_device, enabled=USE_AMP):
+                with torch.amp.autocast('cuda', dtype=AMP_DTYPE, enabled=USE_AMP):
                     output = model(data)
-                    loss = criterion(output, target)
+                loss = criterion(output.float(), target)
                 val_loss += loss.item()
 
         val_loss /= len(val_loader)
