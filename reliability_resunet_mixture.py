@@ -1,13 +1,11 @@
 """
-python reliability_resunet_mixture.py cyyyymmddhh_begin cyyyymmddhh_end clead
+python reliability_resunet_mixture.py clead
 
 e.g.,
 
-python reliability_resunet_mixture.py 2025120100 2025123112 12
+python reliability_resunet_mixture.py 12
 
-    cyyyymmddhh_begin = sys.argv[1]
-    cyyyymmddhh_end = sys.argv[2]
-    clead = sys.argv[3]
+    clead = sys.argv[1]
 
 This will compute BS, reliability, freq use for the test of
 Attention ResUNet with Gamma mixture model.
@@ -48,7 +46,6 @@ ENVIRONMENT, AWS_BASE_PATH = detect_environment()
 def read_config_file(config_file, directory_object_name):
     from configparser import ConfigParser
     import os
-    print(f'INFO: {config_file}')
     config_object = ConfigParser()
     config_object.read(config_file)
     directory = config_object[directory_object_name]
@@ -67,11 +64,6 @@ def read_config_file(config_file, directory_object_name):
         GRAFprobsdir_conus = f"{base_dir}/probs/"
         GRAF_plot_dir = f"{base_dir}/plots/"
         mrms_data_directory = f"{base_dir}/MRMS/"
-
-    print(f"  GRAF data path: {GRAFdatadir_conus}")
-    print(f"  Probs path: {GRAFprobsdir_conus}")
-    print(f"  Plot path: {GRAF_plot_dir}")
-    print(f"  MRMS path: {mrms_data_directory}")
 
     return GRAFdatadir_conus, GRAFprobsdir_conus, \
         GRAF_plot_dir, mrms_data_directory
@@ -172,7 +164,14 @@ def probability_read(clead, cyyyymmddhh, GRAFprobsdir_conus):
     fexist = os.path.exists(infile)
 
     if fexist == True:
-        nc = Dataset(infile,'r')
+        try:
+            nc = Dataset(infile,'r')
+        except OSError as e:
+            istat_prob = -1
+            lat = np.empty((0,0), dtype=float)
+            lon = np.empty((0,0), dtype=float)
+            probs = None
+            return istat_prob, probs, lat, lon
         lat = nc.variables['lat'][:,:]
         lon = nc.variables['lon'][:,:]
 
@@ -202,8 +201,6 @@ def probability_read(clead, cyyyymmddhh, GRAFprobsdir_conus):
         nc.close()
         istat_prob = 0
     else:
-        print (infile)
-        print ('no such file exists.')
         istat_prob = -1
         lat = np.empty((0,0), dtype=float)
         lon = np.empty((0,0), dtype=float)
@@ -238,7 +235,6 @@ def read_MRMS(mrms_data_directory, cyyyymmddhh_verif):
     infile = mrms_data_directory + cyyyymmddhh_verif[0:6]+ \
         '/MRMS_1h_pamt_and_data_qual_' +\
         cyyyymmddhh_verif + '.nc'
-    print (infile)
     fexist = os.path.exists(infile)
     if fexist == True:
         istat = 0
@@ -254,24 +250,31 @@ def read_MRMS(mrms_data_directory, cyyyymmddhh_verif):
 
 # -------------------------------------------------------------------------
 
-def compute_contab_BS(ny, nx, prob, obs, quality, ncats, threshold):
+def compute_contab_BS(ny, nx, prob, obs, quality, ncats, threshold,
+                       climo_mask=None):
     """
     Compute contingency table and Brier Score for one case day.
     Operates on full 2D arrays; handles quality masking internally.
     Call once per case day per threshold; accumulate returned values
     into running totals outside.
+    climo_mask: optional bool 2-D array (True = covered by climatology).
+    When provided, pixels outside the climatology domain are excluded.
     """
 
     contab = np.zeros((ncats, 2), dtype=int)
 
-    # Assign binary_obs: 1=event, 0=non-event, -1=masked (bad quality)
+    # Assign binary_obs: 1=event, 0=non-event, -1=masked
     binary_obs = -1 * np.ones((ny, nx), dtype=int)
 
-    a = np.where(np.logical_and(quality > 0.5,
+    base_cond = quality > 0.5
+    if climo_mask is not None:
+        base_cond = np.logical_and(base_cond, climo_mask)
+
+    a = np.where(np.logical_and(base_cond,
         np.logical_and(obs >= threshold, obs <= 200.0)))
     binary_obs[a] = 1
 
-    a = np.where(np.logical_and(quality > 0.5,
+    a = np.where(np.logical_and(base_cond,
         np.logical_and(obs >= 0.0,
         np.logical_and(obs < threshold, obs <= 200.0))))
     binary_obs[a] = 0
@@ -299,6 +302,48 @@ def compute_contab_BS(ny, nx, prob, obs, quality, ncats, threshold):
 
 # --------------------------------------------------------
 
+def compute_BS_climo(ny, nx, climo_prob_2d, obs, quality, threshold, climo_mask):
+    """
+    Brier Score contribution for the climatological forecast.
+    Only counts pixels where quality > 0.5 AND climo_mask is True,
+    so the sample set is identical to compute_contab_BS with climo_mask.
+    """
+    base = np.logical_and(quality > 0.5, climo_mask)
+
+    good_1 = np.where(np.logical_and(base,
+        np.logical_and(obs >= threshold, obs <= 200.0)))
+    good_0 = np.where(np.logical_and(base,
+        np.logical_and(obs >= 0.0,
+        np.logical_and(obs < threshold, obs <= 200.0))))
+
+    p0 = np.clip(climo_prob_2d[good_0], 0., 1.)
+    p1 = np.clip(climo_prob_2d[good_1], 0., 1.)
+
+    BS = float(np.sum(p0**2) + np.sum((1.0 - p1)**2))
+    nsamps = len(good_0[0]) + len(good_1[0])
+    return BS, nsamps
+
+# --------------------------------------------------------
+
+def compute_BS_only(prob, obs, quality, threshold, mask):
+    """
+    Brier Score and sample count under an arbitrary boolean mask.
+    Pass the combined mask (e.g. climo_valid & west_mask) as 'mask'.
+    """
+    base = np.logical_and(quality > 0.5, mask)
+    good_1 = np.where(np.logical_and(base,
+        np.logical_and(obs >= threshold, obs <= 200.0)))
+    good_0 = np.where(np.logical_and(base,
+        np.logical_and(obs >= 0.0,
+        np.logical_and(obs < threshold, obs <= 200.0))))
+    p0 = np.clip(prob[good_0], 0., 1.)
+    p1 = np.clip(prob[good_1], 0., 1.)
+    BS = float(np.sum(p0**2) + np.sum((1.0 - p1)**2))
+    nsamps = len(good_0[0]) + len(good_1[0])
+    return BS, nsamps
+
+# --------------------------------------------------------
+
 def compute_relia(contab, ncats):
 
     """
@@ -321,10 +366,8 @@ def compute_relia(contab, ncats):
 # --------------------------------------------------------
 # --------------------------------------------------------
 
-cyyyymmddhh_begin = sys.argv[1]
-cyyyymmddhh_end = sys.argv[2]
-clead = sys.argv[3]
-print (cyyyymmddhh_begin, cyyyymmddhh_end, clead)
+clead = sys.argv[1]
+print(f"reliability_resunet_mixture.py lead={clead}h")
 cmtit = 'GRAF'
 pthresholds = [0.25, 1.0, 2.5, 5.0, 10.0]
 nthresholds = len(pthresholds)
@@ -332,8 +375,12 @@ ncats = 11
 cmodel = 'GRAF'
 cmonths = ['Jan','Feb','Mar','Apr','May','Jun','Jul',\
     'Aug','Sep','Oct','Nov','Dec']
-cyyyymmddhh_list = daterange(cyyyymmddhh_begin, \
-    cyyyymmddhh_end, 12)
+mar = daterange('2025030100','2025033118',6)
+jun = daterange('2025060100','2025063018',6)
+sep = daterange('2025090100','2025093018',6)
+dec = daterange('2025120100','2025123118',6)
+
+cyyyymmddhh_list = mar + jun + sep + dec
 ndates = len(cyyyymmddhh_list)
 
 # --- read paths to data
@@ -344,10 +391,38 @@ if ENVIRONMENT == 'aws':
 else:
     config_file_name = 'config_laptop.ini'
 
-print(f"Using config file: {config_file_name}")
 GRAFdatadir_conus, GRAFprobsdir_conus, \
     GRAF_plot_dir, mrms_data_directory = \
     read_config_file(config_file_name, 'DIRECTORIES')
+
+# ---- Output directory for saved reliability data
+
+if ENVIRONMENT == 'aws':
+    relia_dir = os.path.join(AWS_BASE_PATH, 'relia')
+else:
+    relia_dir = os.path.expanduser('~/python/resnet_data/relia')
+os.makedirs(relia_dir, exist_ok=True)
+
+# ---- Read pre-interpolated Stage IV climatology on the GRAF grid
+
+if ENVIRONMENT == 'aws':
+    climo_graf_file = os.path.join(AWS_BASE_PATH, 'stage4_climo_on_graf.nc')
+else:
+    climo_graf_file = os.path.expanduser(
+        '~/python/resnet_data/stage4_climo_on_graf.nc')
+
+_nc = Dataset(climo_graf_file, 'r')
+climo_prob_arr       = _nc.variables['climo_prob'][:]    # (7,12,24,ny,nx)
+climo_thresholds_arr = _nc.variables['threshold'][:]     # mm
+_nc.close()
+
+# Map pthresholds -> climatology threshold dimension indices
+climo_tidx = []
+for thresh in pthresholds:
+    idx = int(np.argmin(np.abs(climo_thresholds_arr - thresh)))
+    if abs(float(climo_thresholds_arr[idx]) - thresh) > 0.01:
+        print(f"WARNING: threshold {thresh} mm not found in climatology file")
+    climo_tidx.append(idx)
 
 # ---- Declare running-sum accumulators
 
@@ -359,14 +434,24 @@ contab_gamma = np.zeros((nthresholds, ncats, 2), dtype=int)
 BS_gamma = np.zeros((nthresholds), dtype=float)
 nsamps_gamma = np.zeros((nthresholds), dtype=float)
 
+BS_climo    = np.zeros(nthresholds, dtype=float)
+nsamps_climo = np.zeros(nthresholds, dtype=float)
+
+BS_raw_west    = np.zeros(nthresholds, dtype=float)
+BS_gamma_west  = np.zeros(nthresholds, dtype=float)
+BS_climo_west  = np.zeros(nthresholds, dtype=float)
+nsamps_raw_west   = np.zeros(nthresholds, dtype=float)
+nsamps_gamma_west = np.zeros(nthresholds, dtype=float)
+nsamps_climo_west = np.zeros(nthresholds, dtype=float)
+
 # --- Loop over dates, accumulating contingency table and BS data
 
 lats_save = None
 lons_save = None
+west_mask = None   # True where lon < -105
 ngood = 0
 
 for idate, date in enumerate(cyyyymmddhh_list):
-    print ('-------- idate, date = ', idate, date)
     validity_date = dateshift(date, int(clead))
 
     # --- Read previously generated raw and gamma-derived probabilities
@@ -377,32 +462,75 @@ for idate, date in enumerate(cyyyymmddhh_list):
     if lats_save is None and istat_prob == 0:
         lats_save = lat
         lons_save = lon
+        west_mask = lon < -105.0
 
     # ---- Read MRMS hourly accumulated precip and data quality
     istat_MRMS, MRMS_precip, MRMS_quality = \
         read_MRMS(mrms_data_directory, validity_date)
 
-    print ('istat_MRMS, istat_prob = ', istat_MRMS, istat_prob)
+    prob_status = 'ok' if istat_prob == 0 else 'missing'
+    mrms_status = 'ok' if istat_MRMS == 0 else 'missing'
+    print(f"{idate:4d}  init={date}  lead={clead}h  "
+          f"prob={prob_status}  mrms={mrms_status}")
+
     if istat_MRMS != 0 or istat_prob != 0:
         continue
 
     ngood += 1
     ny, nx = MRMS_precip.shape
 
+    # ---- Look up pre-interpolated Stage IV climatology for this validity time
+    validity_month_idx = int(validity_date[4:6]) - 1   # 0-indexed (0=Jan)
+    validity_utc_hour  = int(validity_date[8:10])
+
+    # Stack needed thresholds: shape (ny, nx, nthresholds)
+    climo_all = np.stack([
+        climo_prob_arr[climo_tidx[i], validity_month_idx, validity_utc_hour]
+        for i in range(nthresholds)
+    ], axis=-1)
+
     # ---- Accumulate contingency table and BS for each threshold
     for ithresh, thresh in enumerate(pthresholds):
 
+        climo_2d    = climo_all[:, :, ithresh]
+        climo_valid = np.isfinite(climo_2d)   # False where Stage IV has no data
+
         ctab, bs, ns = compute_contab_BS(ny, nx,
-            probs[thresh]['raw'], MRMS_precip, MRMS_quality, ncats, thresh)
+            probs[thresh]['raw'], MRMS_precip, MRMS_quality, ncats, thresh,
+            climo_mask=climo_valid)
         contab_raw[ithresh] += ctab
         BS_raw[ithresh] += bs
         nsamps_raw[ithresh] += ns
 
         ctab, bs, ns = compute_contab_BS(ny, nx,
-            probs[thresh]['gamma'], MRMS_precip, MRMS_quality, ncats, thresh)
+            probs[thresh]['gamma'], MRMS_precip, MRMS_quality, ncats, thresh,
+            climo_mask=climo_valid)
         contab_gamma[ithresh] += ctab
         BS_gamma[ithresh] += bs
         nsamps_gamma[ithresh] += ns
+
+        bs_c, ns_c = compute_BS_climo(ny, nx, climo_2d,
+            MRMS_precip, MRMS_quality, thresh, climo_valid)
+        BS_climo[ithresh]    += bs_c
+        nsamps_climo[ithresh] += ns_c
+
+        # ---- West-of-105W subset (for BSS only, not reliability diagrams)
+        west_climo_mask = np.logical_and(climo_valid, west_mask)
+
+        bs_rw, ns_rw = compute_BS_only(probs[thresh]['raw'],
+            MRMS_precip, MRMS_quality, thresh, west_climo_mask)
+        BS_raw_west[ithresh]    += bs_rw
+        nsamps_raw_west[ithresh] += ns_rw
+
+        bs_gw, ns_gw = compute_BS_only(probs[thresh]['gamma'],
+            MRMS_precip, MRMS_quality, thresh, west_climo_mask)
+        BS_gamma_west[ithresh]    += bs_gw
+        nsamps_gamma_west[ithresh] += ns_gw
+
+        bs_cw, ns_cw = compute_BS_climo(ny, nx, climo_2d,
+            MRMS_precip, MRMS_quality, thresh, west_climo_mask)
+        BS_climo_west[ithresh]    += bs_cw
+        nsamps_climo_west[ithresh] += ns_cw
 
 # ---- Check that we have usable data
 
@@ -414,6 +542,21 @@ if ngood == 0:
     sys.exit(1)
 
 print(f"\n Found {ngood} dates with complete data out of {ndates} total dates")
+
+# ---- Allocate per-threshold storage for output file
+
+relia_raw_arr    = np.full((nthresholds, ncats), -99.99)
+relia_gamma_arr  = np.full((nthresholds, ncats), -99.99)
+frequse_raw_arr  = np.zeros((nthresholds, ncats))
+frequse_gamma_arr = np.zeros((nthresholds, ncats))
+BSS_raw_arr      = np.full(nthresholds, np.nan)
+BSS_gamma_arr    = np.full(nthresholds, np.nan)
+BS_raw_arr       = np.full(nthresholds, np.nan)
+BS_gamma_arr     = np.full(nthresholds, np.nan)
+BS_climo_arr     = np.full(nthresholds, np.nan)
+BSS_raw_west_arr   = np.full(nthresholds, np.nan)
+BSS_gamma_west_arr = np.full(nthresholds, np.nan)
+BS_climo_west_arr  = np.full(nthresholds, np.nan)
 
 # ---- Compute reliability, frequency of usage, and Brier score per threshold
 
@@ -432,6 +575,38 @@ for ithresh, thresh in enumerate(pthresholds):
     BS_gamma[ithresh] = BS_gamma[ithresh] / \
         float(nsamps_gamma[ithresh])
 
+    BS_climo_mean = BS_climo[ithresh] / float(nsamps_climo[ithresh]) \
+        if nsamps_climo[ithresh] > 0 else np.nan
+    BSS_raw   = 1.0 - BS_raw[ithresh]   / BS_climo_mean \
+        if BS_climo_mean > 0 else np.nan
+    BSS_gamma = 1.0 - BS_gamma[ithresh] / BS_climo_mean \
+        if BS_climo_mean > 0 else np.nan
+
+    BS_climo_west_mean = BS_climo_west[ithresh] / float(nsamps_climo_west[ithresh]) \
+        if nsamps_climo_west[ithresh] > 0 else np.nan
+    BSS_raw_west   = 1.0 - (BS_raw_west[ithresh]   / nsamps_raw_west[ithresh])   / BS_climo_west_mean \
+        if BS_climo_west_mean > 0 else np.nan
+    BSS_gamma_west = 1.0 - (BS_gamma_west[ithresh] / nsamps_gamma_west[ithresh]) / BS_climo_west_mean \
+        if BS_climo_west_mean > 0 else np.nan
+
+    print(f"  thresh={thresh}mm | CONUS:  BSS_raw={BSS_raw:.2f}  BSS_gamma={BSS_gamma:.2f}  "
+          f"BS_climo={BS_climo_mean:.5f}")
+    print(f"  thresh={thresh}mm | West:   BSS_raw={BSS_raw_west:.2f}  BSS_gamma={BSS_gamma_west:.2f}  "
+          f"BS_climo={BS_climo_west_mean:.5f}")
+
+    relia_raw_arr[ithresh]    = relia_raw
+    relia_gamma_arr[ithresh]  = relia_gamma
+    frequse_raw_arr[ithresh]  = frequse_raw
+    frequse_gamma_arr[ithresh] = frequse_gamma
+    BSS_raw_arr[ithresh]      = BSS_raw
+    BSS_gamma_arr[ithresh]    = BSS_gamma
+    BS_raw_arr[ithresh]       = BS_raw[ithresh]
+    BS_gamma_arr[ithresh]     = BS_gamma[ithresh]
+    BS_climo_arr[ithresh]     = BS_climo_mean
+    BSS_raw_west_arr[ithresh]   = BSS_raw_west
+    BSS_gamma_west_arr[ithresh] = BSS_gamma_west
+    BS_climo_west_arr[ithresh]  = BS_climo_west_mean
+
     cthresh = r'P(obs $\geq$ '+str(thresh) + ' mm)'
     ctthresh = str(thresh)+'mm'
 
@@ -445,11 +620,11 @@ for ithresh, thresh in enumerate(pthresholds):
     a1 = fig.add_axes([.13,.1,.83,.8])
     a1.set_title(ctitle,fontsize=14)
 
-    # Add date range in upper left corner
-    date_range_str = format_date_range(cyyyymmddhh_begin, cyyyymmddhh_end)
-    a1.text(0.02, 0.98, date_range_str, transform=a1.transAxes,
-            fontsize=10, verticalalignment='top', horizontalalignment='left',
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+    ## Add date range in upper left corner
+    #date_range_str = format_date_range(cyyyymmddhh_begin, cyyyymmddhh_end)
+    #a1.text(0.02, 0.98, date_range_str, transform=a1.transAxes,
+    #        fontsize=10, verticalalignment='top', horizontalalignment='left',
+    #        bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
 
     for imodel in range(2):
         if imodel == 0:
@@ -460,14 +635,14 @@ for ithresh, thresh in enumerate(pthresholds):
             a1.set_xlim(-1,101)
             relia = relia_raw
             f = frequse_raw
-            cbs = "%0.5f"%(BS_raw[ithresh])
-            label='Smoothed GRAF raw probability, BS = '+cbs
+            cbss = "%.2f" % BSS_raw if not np.isnan(BSS_raw) else "N/A"
+            label = 'Smoothed GRAF raw probability, BSS = ' + cbss
             color='Red'
         elif imodel == 1:
             relia = relia_gamma
             f = frequse_gamma
-            cbs = "%0.5f"%(BS_gamma[ithresh])
-            label='Fitted Gamma mixture probability, BS = '+cbs
+            cbss = "%.2f" % BSS_gamma if not np.isnan(BSS_gamma) else "N/A"
+            label = 'Attention ResUNet, BSS = ' + cbss
             color='RoyalBlue'
 
         relia_ma = ma.masked_where(relia < -99., relia)
@@ -478,16 +653,16 @@ for ithresh, thresh in enumerate(pthresholds):
 
         if imodel == 0:
             a2 = fig.add_axes([.26,.63,.34,.18])
-            a2.bar(probability-1.5,f[:],width=1.5,bottom=0.0001,\
+            a2.bar(probability-1.5,f[:],width=1.5,bottom=1e-5,\
                 log=True,color=color,edgecolor='None',align='center')
             a2.set_xlim(-5,105)
-            a2.set_ylim(0.0001,1.)
+            a2.set_ylim(1e-5,1.)
             a2.set_title('Frequency of usage',fontsize=9)
             a2.set_xlabel('Forecast probability',fontsize=7)
             a2.set_ylabel('Forecast frequency',fontsize=7)
-            a2.hlines([0.001,.01,.1],0,100,linestyles='dashed',colors='gray',lw=0.5)
+            a2.hlines([1e-4,0.001,.01,.1],0,100,linestyles='dashed',colors='gray',lw=0.5)
         elif imodel == 1:
-            a2.bar(probability, f[:], width=1.5, bottom=0.0001,\
+            a2.bar(probability, f[:], width=1.5, bottom=1e-5,\
                 log=True,color=color,edgecolor='None',align='center')
 
     a1.legend(loc=4, fontsize='small')
@@ -496,3 +671,34 @@ for ithresh, thresh in enumerate(pthresholds):
         ctthresh + '_' + clead + 'h.png'
     print ('  Saving plot to file = ',plot_title)
     plt.savefig(plot_title, dpi=300)
+
+# ---- Save reliability data to cPick file
+
+out_dict = {
+    'pthresholds':    pthresholds,
+    'probability':    probability,
+    'ngood':          ngood,
+    'relia_raw':      relia_raw_arr,
+    'relia_gamma':    relia_gamma_arr,
+    'frequse_raw':    frequse_raw_arr,
+    'frequse_gamma':  frequse_gamma_arr,
+    'BSS_raw':        BSS_raw_arr,
+    'BSS_gamma':      BSS_gamma_arr,
+    'BS_raw':         BS_raw_arr,
+    'BS_gamma':       BS_gamma_arr,
+    'BS_climo':       BS_climo_arr,
+    'BSS_raw_west':   BSS_raw_west_arr,
+    'BSS_gamma_west': BSS_gamma_west_arr,
+    'BS_climo_west':  BS_climo_west_arr,
+    'contab_raw':     contab_raw,
+    'contab_gamma':   contab_gamma,
+    'nsamps_raw':     nsamps_raw,
+    'nsamps_gamma':   nsamps_gamma,
+    'nsamps_climo':   nsamps_climo,
+}
+relia_outfile = os.path.join(relia_dir,
+    f'relia_GRAF_ResUNet_Mixture_q0.5_{cyyyymmddhh_list[0]}_to_'
+    f'{cyyyymmddhh_list[-1]}_lead{clead}h.cPick')
+with open(relia_outfile, 'wb') as f_out:
+    cPickle.dump(out_dict, f_out)
+print(f'Saved reliability data to {relia_outfile}')
