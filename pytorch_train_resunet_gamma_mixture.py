@@ -154,8 +154,8 @@ ACCUMULATION_STEPS = 1
 
 PATCH_SIZE = 96
 BASE_LEARNING_RATE = 7.e-4  # Slightly lower for mixture model
-NUM_EPOCHS = 30
-EARLY_STOPPING_PATIENCE = 4
+NUM_EPOCHS = 40
+EARLY_STOPPING_PATIENCE = 7
 
 # --- 3a. Power Transformation Parameter ---
 # Apply power transformation to GRAF precipitation: precip^POWER_TRANSFORM

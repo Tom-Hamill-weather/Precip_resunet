@@ -1,0 +1,10 @@
+#!/bin/bash
+
+python control_resunet_inference_gamma_mixture_fulldomain.py 2025030100 2025033118
+
+python control_resunet_inference_gamma_mixture_fulldomain.py 2025060100 2025063018
+
+python control_resunet_inference_gamma_mixture_fulldomain.py 2025090100 2025093018
+
+python control_resunet_inference_gamma_mixture_fulldomain.py 2025120100 2025123118
+

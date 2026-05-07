@@ -18,10 +18,11 @@ for LEAD in $(seq 1 48); do
         continue
     fi
     echo "--- Lead ${LEAD}h ---"
-    python resunet_inference_gamma_mixture_fulldomain_europe.py ${CYYYYMMDDHH} ${LEAD}
-    if [ $? -ne 0 ]; then
-        echo "ERROR: inference failed for lead ${LEAD}h, skipping plot."
-        continue
-    fi
+    #python resunet_inference_gamma_mixture_fulldomain_europe.py ${CYYYYMMDDHH} ${LEAD}
+    #if [ $? -ne 0 ]; then
+    #    echo "ERROR: inference failed for lead ${LEAD}h, skipping plot."
+    #    continue
+    #fi
     python make_plots_gamma_mixture2_europe.py ${CYYYYMMDDHH} ${LEAD}
+    python make_plots_gamma_mixture2_3panel_europe.py ${CYYYYMMDDHH} ${LEAD}
 done
