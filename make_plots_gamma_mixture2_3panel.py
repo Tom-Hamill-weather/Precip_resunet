@@ -143,7 +143,7 @@ def GRAF_precip_read(clead, cyyyymmddhh, GRAFdatadir_conus_new, GRAFdatadir_conu
 
 # -------------------------------------------------------------
 
-def probability_read(clead, cyyyymmddhh, GRAFprobsdir_conus):
+def probability_read(clead, cyyyymmddhh, GRAFprobsdir_conus, read_attention=False):
     infile = GRAFprobsdir_conus + cyyyymmddhh + \
         '_' + clead + '_probs_gamma_mixture.nc'
     if not os.path.exists(infile):
@@ -156,13 +156,75 @@ def probability_read(clead, cyyyymmddhh, GRAFprobsdir_conus):
     lon = nc.variables['lon'][:,:]
     raw_p0p25mm_prob   = np.ma.masked_invalid(nc.variables['raw_p0p25mm_prob'][:,:])
     gamma_p0p25mm_prob = np.ma.masked_invalid(nc.variables['gamma_p0p25mm_prob'][:,:])
+
+    attn_gate4 = None
+    if read_attention:
+        if 'attn_gate4' in nc.variables:
+            attn_gate4 = np.ma.masked_invalid(nc.variables['attn_gate4'][:,:])
+            print(f'attn_gate4: min={float(np.nanmin(attn_gate4)):.3f}  '
+                  f'max={float(np.nanmax(attn_gate4)):.3f}  '
+                  f'mean={float(np.nanmean(attn_gate4)):.3f}')
+        else:
+            print('WARNING: --save-attention flagged but attn_gate4 not found in NetCDF. '
+                  'Re-run inference with --save-attention.')
     nc.close()
 
     print('max raw/gamma P(>0.25mm) = ',
         np.max(raw_p0p25mm_prob), np.max(gamma_p0p25mm_prob))
-    return raw_p0p25mm_prob, gamma_p0p25mm_prob, lat, lon
+    return raw_p0p25mm_prob, gamma_p0p25mm_prob, lat, lon, attn_gate4
 
 # -------------------------------------------------------------
+
+def plot_attention_panel(lat_1, lat_2, lat_0, lon_0, lons, lats,
+        llcrnrlon, llcrnrlat, urcrnrlon, urcrnrlat,
+        cyyyymmddhh, clead, attn_gate4, GRAF_plot_dir):
+    """Single-panel plot of the finest-scale attention weight (attn_gate4)."""
+
+    m = Basemap(rsphere=(6378137.00, 6356752.3142),
+        resolution='l', projection='lcc', area_thresh=1000.,
+        lat_1=lat_1, lat_2=lat_2, lat_0=lat_0, lon_0=lon_0,
+        llcrnrlon=llcrnrlon, llcrnrlat=llcrnrlat,
+        urcrnrlon=urcrnrlon, urcrnrlat=urcrnrlat)
+
+    x, y = m(lons, lats)
+
+    cyyyymmddhh_valid = dateshift(cyyyymmddhh, int(clead))
+    cmonths = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+               'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    cmonth = cmonths[int(cyyyymmddhh_valid[4:6]) - 1]
+    datestring = (cyyyymmddhh_valid[8:10] + ' UTC ' +
+                  cyyyymmddhh_valid[6:8] + ' ' + cmonth + ' ' +
+                  cyyyymmddhh_valid[0:4])
+    clead_minus = str(int(clead) - 1)
+
+    clevs_attn = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+
+    fig = plt.figure(figsize=(6, 5))
+    plt.suptitle(clead_minus + ' to ' + clead +
+        '-h forecast, valid ' + datestring,
+        fontsize=14, y=0.98)
+
+    ax = fig.add_axes([0.05, 0.12, 0.88, 0.78])
+    CS = m.contourf(x, y, attn_gate4, clevs_attn,
+                    cmap=plt.cm.YlOrRd, extend='both')
+    ax.set_title('Attention gate weight ν (Up4, finest scale)', fontsize=11)
+    m.drawcoastlines(linewidth=0.6, color='Gray')
+    m.drawcountries(linewidth=0.4, color='Gray')
+    m.drawstates(linewidth=0.2, color='Gray')
+
+    cax = fig.add_axes([0.05, 0.055, 0.88, 0.025])
+    cb = plt.colorbar(CS, orientation='horizontal', cax=cax,
+                      drawedges=True, ticks=clevs_attn, format='%g')
+    cb.ax.tick_params(labelsize=7)
+    cb.set_label('Attention weight ν (0 = suppressed, 1 = attended)', fontsize=9)
+
+    plot_title = (GRAF_plot_dir + 'ResUnet_attn4_IC' +
+                  cyyyymmddhh + '_lead' + clead + 'h_gamma.png')
+    fig.savefig(plot_title, dpi=400, bbox_inches='tight')
+    print('saving attention plot to file = ', plot_title)
+    plt.close(fig)
+    return 0
+
 
 def plot_3panel(lat_1, lat_2, lat_0, lon_0, lons, lats,
         llcrnrlon, llcrnrlat, urcrnrlon, urcrnrlat,
@@ -269,6 +331,7 @@ def plot_3panel(lat_1, lat_2, lat_0, lon_0, lons, lats,
 
 cyyyymmddhh = sys.argv[1]
 clead = sys.argv[2]
+save_attention = '--save-attention' in sys.argv
 
 if ENVIRONMENT == 'aws':
     config_file_name = 'config_aws.ini'
@@ -289,8 +352,9 @@ istat_GRAF, precipitation_GRAF, lats, lons, ny, nx, latmin, latmax, \
     lonmin, lonmax, verif_local_time, lon_0, lat_0, lat_1, lat_2 = \
     GRAF_precip_read(clead, cyyyymmddhh, GRAFdatadir_conus_new, GRAFdatadir_conus_old)
 
-raw_p0p25mm_prob, gamma_p0p25mm_prob, lat, lon = \
-    probability_read(clead, cyyyymmddhh, GRAFprobsdir_conus)
+raw_p0p25mm_prob, gamma_p0p25mm_prob, lat, lon, attn_gate4 = \
+    probability_read(clead, cyyyymmddhh, GRAFprobsdir_conus,
+                     read_attention=save_attention)
 
 if istat_GRAF == 0:
 
@@ -314,6 +378,11 @@ if istat_GRAF == 0:
         llcrnrlon, llcrnrlat, urcrnrlon, urcrnrlat,
         cyyyymmddhh, clead, precipitation_GRAF,
         gamma_p0p25mm_prob, raw_p0p25mm_prob, GRAF_plot_dir)
+
+    if save_attention and attn_gate4 is not None:
+        plot_attention_panel(lat_1, lat_2, lat_0, lon_0, lons, lats,
+            llcrnrlon, llcrnrlat, urcrnrlon, urcrnrlat,
+            cyyyymmddhh, clead, attn_gate4, GRAF_plot_dir)
 
 else:
     print('GRAF forecast data not found.')

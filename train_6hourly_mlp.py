@@ -77,10 +77,20 @@ SCALE_MIN = 0.01
 
 HIDDEN_SIZES = [72, 144, 72, 36, 12]
 
-# Data directory (relative to this script's location)
-SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR     = os.path.join(SCRIPT_DIR, 'data')
-TRAIN_DIR    = os.path.join(SCRIPT_DIR, 'mlp_trainings')
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def _locate_data_dir():
+    for base in ['/data/resnet_data', '/data2/resnet_data']:
+        candidate = os.path.join(base, 'prob_samples')
+        if os.path.isdir(candidate):
+            return candidate
+    raise RuntimeError(
+        "Cannot locate prob_samples directory. "
+        "Expected /data/resnet_data/prob_samples or /data2/resnet_data/prob_samples."
+    )
+
+DATA_DIR  = _locate_data_dir()
+TRAIN_DIR = os.path.join(SCRIPT_DIR, 'mlp_trainings')
 
 FEATURE_VARS = [
     'fraction_zero', 'mixture_weight',

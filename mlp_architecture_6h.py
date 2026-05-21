@@ -33,17 +33,18 @@ def t(ax, x, y, s, color='white', fs=9, ha='center', va='center',
 
 
 def main():
-    FW, FH = 22.0, 13.0
+    FW, FH = 22.0, 9.0
     fig = plt.figure(figsize=(FW, FH))
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set_xlim(0, FW); ax.set_ylim(0, FH); ax.axis('off')
-    fig.patch.set_facecolor('#F6F6F6')
+    ax.set_facecolor('none')
+    fig.patch.set_facecolor('white')
 
     C_H  = '#2874A6'   # expansion  – blue
     C_HD = '#1A5276'   # contraction – dark blue
     C_O  = '#1A7A43'   # output      – green
     BW = 1.55          # box width
-    CY = 5.85          # vertical centre (shifted up for taller figure)
+    CY = 4.8
 
     # Heights scaled so 144 → 3.6; visually distinguishable but not extreme
     H = {144: 3.60, 72: 2.20, 36: 1.40, 12: 0.95, 6: 0.80}
@@ -126,15 +127,6 @@ def main():
 
     arrow(ax, xs[-1] + BW/2 + 0.08, CY, ox - OW/2 - 0.08, CY)
 
-    # ── title ────────────────────────────────────────────────────────────────
-    t(ax, FW/2, 12.20,
-      'GammaMixtureMLP  —  6-Hourly Precipitation Forecast',
-      color='#1A1A1A', fs=24, bold=True)
-    t(ax, FW/2, 11.55,
-      'Input: 6 consecutive hourly Gamma-mixture parameter sets  '
-      '(6 params × 6 h = 36)  →  6-h zero-inflated two-component Gamma mixture',
-      color='#555', fs=16)
-
     # annotation: max-width layer
     cx144, h144 = xs[1], hs[1]
     ax.annotate('max expansion\n(144 neurons)',
@@ -145,14 +137,14 @@ def main():
                 zorder=5)
 
     # bottom note
-    t(ax, FW/2, 1.10,
-      'Hidden layers: Linear → BatchNorm1d → ReLU     '
-      '·     Post-forward reordering ensures α₁θ₁ ≤ α₂θ₂  '
+    t(ax, FW/2, 1.80,
+      'Hidden layers: Linear → BatchNorm1d → ReLU\n'
+      'Post-forward reordering ensures α₁θ₁ ≤ α₂θ₂  '
       '(comp. 1 = lighter precipitation)',
-      color='#444', fs=14)
+      color='#444', fs=21)
 
     fig.savefig('mlp_architecture_6h.png', dpi=150,
-                bbox_inches='tight', facecolor='#F6F6F6')
+                bbox_inches='tight', pad_inches=0.15, facecolor='white')
     print('Saved: mlp_architecture_6h.png')
 
 

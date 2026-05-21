@@ -287,6 +287,7 @@ class AttentionGate(nn.Module):
         x1 = self.W_x(x)
         psi = self.relu(g1 + x1)
         psi = self.psi(psi)
+        self._alpha = psi  # spatial attention map nu in (0,1); shape [B,1,H,W]
         return x * psi
 
 class AttnResUNet(nn.Module):
@@ -328,7 +329,7 @@ class AttnResUNet(nn.Module):
         # Final output layer - now outputs 6 channels for mixture model
         self.outc = nn.Conv2d(64, num_outputs, kernel_size=1)
 
-    def forward(self, x):
+    def forward(self, x, return_attention=False):
         # Encoder
         x1 = self.inc(x)
         x2 = self.down1(x1)
@@ -355,6 +356,16 @@ class AttnResUNet(nn.Module):
 
         # Output: 6 unconstrained values per pixel
         logits = self.outc(x)
+        if return_attention:
+            # att1._alpha is coarsest (1/8 resolution); att4._alpha is finest (full resolution).
+            # Each has shape [B, 1, H, W] with values in (0, 1).
+            attention_maps = [
+                self.att1._alpha,
+                self.att2._alpha,
+                self.att3._alpha,
+                self.att4._alpha,
+            ]
+            return logits, attention_maps
         return logits
 
 # ====================================================================
