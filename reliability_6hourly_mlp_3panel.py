@@ -340,21 +340,21 @@ def plot_3panel(probability, relia_arr, frequse_arr, BSS_arr,
 
         ax.set_xlim(-1, 101)
         ax.set_ylim(-1, 101)
-        ax.set_title(panel_label, fontsize=17)
-        ax.set_xlabel('Forecast probability (%)', fontsize=13)
-        ax.set_ylabel('Observed relative frequency (%)', fontsize=13)
-        ax.legend(loc='lower right', fontsize=10)
+        ax.set_title(panel_label, fontsize=19)
+        ax.set_xlabel('Forecast probability (%)', fontsize=14)
+        ax.set_ylabel('Observed relative frequency (%)', fontsize=14)
+        ax.legend(loc='lower right', fontsize=12)
 
         # --- frequency-of-usage inset (upper-left of each panel) ---
-        ax_in = ax.inset_axes([0.12, 0.60, 0.42, 0.25])
+        ax_in = ax.inset_axes([0.13, 0.65, 0.42, 0.25])
         ax_in.bar(probability, frequse, width=1.5, bottom=1e-5,
                   log=True, color='RoyalBlue', edgecolor='None', align='center')
         ax_in.set_xlim(-5, 105)
-        ax_in.set_ylim(1e-5, 1.)
+        ax_in.set_ylim(1e-4, 1.)
         ax_in.set_title('Frequency of usage', fontsize=10)
         ax_in.set_xlabel('Fcst prob.', fontsize=8)
         ax_in.set_ylabel('Frequency',  fontsize=8)
-        ax_in.hlines([1e-4, 0.001, 0.01, 0.1], 0, 100,
+        ax_in.hlines([1e-3, 0.001, 0.01, 0.1], 0, 100,
                      linestyles='dashed', colors='gray', lw=0.5)
         ax_in.tick_params(labelsize=7)
 
