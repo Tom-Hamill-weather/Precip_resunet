@@ -243,9 +243,13 @@ the CONUS domain.  Each patch comprises seven input channels:
         R$): Captures the modulation of precipitation forecasts by
         the large-scale moisture environment.
   \item \textbf{Terrain gradient, zonal} ($\partial z / \partial
-        \lambda$): Longitude component of terrain slope.
+        \lambda$): Longitude component of the terrain slope,
+        computed from the smoothed terrain height (Gaussian
+        convolution, 15 grid-point length scale, as in feature~(2)).
   \item \textbf{Terrain gradient, meridional} ($\partial z /
-        \partial \phi$): Latitude component of terrain slope.
+        \partial \phi$): Latitude component of the terrain slope,
+        likewise computed from the 15 grid-point smoothed terrain
+        height.
 \end{enumerate}
 
 
