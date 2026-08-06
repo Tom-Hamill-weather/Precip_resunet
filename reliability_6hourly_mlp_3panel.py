@@ -78,7 +78,10 @@ class GammaMixtureMLP(nn.Module):
         for in_sz, out_sz in zip(layer_sizes, layer_sizes[1:]):
             layers += [nn.Linear(in_sz, out_sz),
                        nn.BatchNorm1d(out_sz),
-                       nn.ReLU()]
+                       nn.ReLU(),
+                       nn.Dropout(0.15)]  # no-op in eval() mode; kept only so
+                                          # Sequential indices (and therefore
+                                          # state_dict keys) match train_6hourly_mlp.py
         layers.append(nn.Linear(hidden_sizes[-1], 6))
         self.net = nn.Sequential(*layers)
 
@@ -95,16 +98,84 @@ class GammaMixtureMLP(nn.Module):
         scale2        = self.scale_min + F.softplus(raw[:, 5])
         return frac_zero, mix_weight, shape1, scale1, shape2, scale2
 
+
+FILM_HIDDEN = 16
+
+
+class GammaMixtureMLPFiLM(nn.Module):
+    """Must match train_6hourly_mlp.py's GammaMixtureMLPFiLM exactly."""
+
+    def __init__(self, hidden_sizes=HIDDEN_SIZES,
+                 shape_min=SHAPE_MIN, scale_min=SCALE_MIN, n_input=39,
+                 min_separation=0.5, film_hidden=FILM_HIDDEN):
+        super().__init__()
+        self.shape_min = shape_min
+        self.scale_min = scale_min
+        self.min_separation = min_separation
+        self.trunk_input = n_input - 1
+
+        layer_sizes = [self.trunk_input] + hidden_sizes
+        self.linears = nn.ModuleList()
+        self.bns     = nn.ModuleList()
+        for in_sz, out_sz in zip(layer_sizes, layer_sizes[1:]):
+            self.linears.append(nn.Linear(in_sz, out_sz))
+            self.bns.append(nn.BatchNorm1d(out_sz))
+        self.output_layer = nn.Linear(hidden_sizes[-1], 6)
+
+        self.film_body = nn.Sequential(nn.Linear(1, film_hidden), nn.ReLU())
+        self.film_heads = nn.ModuleList()
+        for out_sz in hidden_sizes:
+            head = nn.Linear(film_hidden, 2 * out_sz)
+            nn.init.zeros_(head.weight)
+            nn.init.zeros_(head.bias)
+            self.film_heads.append(head)
+
+    def forward(self, x):
+        terrain   = x[:, self.trunk_input:self.trunk_input + 1]
+        h         = x[:, :self.trunk_input]
+        film_feat = self.film_body(terrain)
+
+        for linear, bn, head in zip(self.linears, self.bns, self.film_heads):
+            h = linear(h)
+            h = bn(h)
+            gamma, beta = head(film_feat).chunk(2, dim=1)
+            h = (1.0 + gamma) * h + beta
+            h = F.relu(h)
+
+        raw = self.output_layer(h)
+        frac_zero  = torch.sigmoid(raw[:, 0])
+        mix_weight = torch.sigmoid(raw[:, 1])
+        shape1     = self.shape_min + F.softplus(raw[:, 2])
+        scale1     = self.scale_min + F.softplus(raw[:, 3])
+        shape2_offset = F.softplus(raw[:, 4])
+        shape2        = shape1 + shape2_offset + self.min_separation
+        scale2        = self.scale_min + F.softplus(raw[:, 5])
+        return frac_zero, mix_weight, shape1, scale1, shape2, scale2
+
 # =========================================================================
 # Checkpoint loader
 # =========================================================================
 
-def load_mlp(clead, device):
+TERRAIN_MASK_NC = os.path.join(SCRIPT_DIR, 'terrain_roughness_mask_graf.nc')
+
+
+def load_local_std_grid():
+    """Static (ny, nx) local terrain-roughness field, same grid as GRAF/MRMS.
+    Must match sample_6hourly_prob_mrms.py's load_local_std() exactly.
+    log1p-transformed to match the skew-correction applied to sample_local_std
+    in train_6hourly_mlp.py's load_data()."""
+    with Dataset(TERRAIN_MASK_NC, 'r') as ds:
+        return np.log1p(np.asarray(ds.variables['local_std'][:], dtype=np.float32))
+
+
+def load_mlp(clead, device, variant=None):
+    suffix = f'_{variant}' if variant else ''
     ckpt_path = os.path.join(SCRIPT_DIR, 'mlp_trainings',
-                             f'6h_mlp_lead{clead}h.pth')
+                             f'6h_mlp_lead{clead}h{suffix}.pth')
     if not os.path.exists(ckpt_path):
         print(f'ERROR: MLP checkpoint not found: {ckpt_path}')
-        print(f'  Run:  python train_6hourly_mlp.py {clead}')
+        print(f'  Run:  python train_6hourly_mlp.py {clead}'
+              f'{" " + variant if variant else ""}')
         sys.exit(1)
 
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
@@ -112,10 +183,12 @@ def load_mlp(clead, device):
     shape_min    = ckpt.get('shape_min',    SHAPE_MIN)
     scale_min    = ckpt.get('scale_min',    SCALE_MIN)
     n_input      = ckpt.get('n_input',      38)
+    architecture = ckpt.get('architecture', 'concat')
 
-    model = GammaMixtureMLP(hidden_sizes=hidden_sizes,
-                            shape_min=shape_min, scale_min=scale_min,
-                            n_input=n_input)
+    ModelClass = GammaMixtureMLPFiLM if architecture == 'film' else GammaMixtureMLP
+    model = ModelClass(hidden_sizes=hidden_sizes,
+                       shape_min=shape_min, scale_min=scale_min,
+                       n_input=n_input)
     model.load_state_dict(ckpt['model_state_dict'])
     model.to(device)
     model.eval()
@@ -233,12 +306,15 @@ MLP_BATCH = 131072
 
 
 def apply_mlp_fulldomain(model, feat_mean, feat_std, params_6h, ny, nx, device,
-                          cos_doy, sin_doy):
+                          cos_doy, sin_doy, local_std=None):
     npix = ny * nx
     blocks = [params_6h[k].reshape(6, npix).T for k in PARAM_VARS]
     hourly_feats   = np.concatenate(blocks, axis=1).astype(np.float32)
     seasonal_feats = np.tile(np.array([cos_doy, sin_doy], dtype=np.float32), (npix, 1))
-    feats = np.concatenate([hourly_feats, seasonal_feats], axis=1)
+    feat_blocks = [hourly_feats, seasonal_feats]
+    if local_std is not None:
+        feat_blocks.append(local_std.reshape(npix, 1).astype(np.float32))
+    feats = np.concatenate(feat_blocks, axis=1)
 
     std_safe   = np.where(feat_std < 1e-8, 1.0, feat_std)
     feats_norm = (feats - feat_mean) / std_safe
@@ -444,18 +520,21 @@ def plot_3panel(probability, relia_arr, frequse_arr, BSS_arr,
     print(f'Saved 3-panel figure: {out_path}')
 
 # =========================================================================
-# Out-of-sample test date list: day 10 through month-end, all 12 months
-# of 2025, 00Z/12Z only.  Days 1-7 of each month are used for MLP training
-# (see sample_6hourly_prob_mrms.py) and days 8-9 are a gap left out
+# Out-of-sample test date list: day 12 through month-end, all 12 months
+# of 2025, 00Z/12Z only.  Days 1-9 of each month are used for MLP training
+# (see sample_6hourly_prob_mrms.py) and days 10-11 are a gap left out
 # entirely, so persistent synoptic systems can't leak across the
 # train/test boundary.
+# (2026-08-05: widened train window 1-7 -> 1-9 to add more independent
+# synoptic snapshots, part of the sampling-redundancy fix; gap shifted
+# 8-9 -> 10-11, test start shifted 10 -> 12.)
 # =========================================================================
 
 MONTHS_2025 = [
     (1, 31), (2, 28), (3, 31), (4, 30), (5, 31), (6, 30),
     (7, 31), (8, 31), (9, 30), (10, 31), (11, 30), (12, 31),
 ]
-TEST_DAY_START = 10   # days 1-7 train, 8-9 gap, 10-end test
+TEST_DAY_START = 12   # days 1-9 train, 10-11 gap, 12-end test
 
 
 def build_test_datelist():
@@ -533,6 +612,10 @@ def main():
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f'Torch device: {device}')
         model, feat_mean, feat_std = load_mlp(clead, device)
+        # Only checkpoints trained with the local_std terrain feature
+        # (2026-08-04 onward) have n_input=39; older checkpoints stay at 38
+        # and must not get a 39th feature appended.
+        local_std_grid = load_local_std_grid() if len(feat_mean) >= 39 else None
 
         ndates = len(cyyyymmddhh_list)
         print(f'Total init times to process: {ndates}')
@@ -595,7 +678,7 @@ def main():
             cos_doy, sin_doy = julian_features(cdate)
             fz, mw, s1, sc1, s2, sc2 = apply_mlp_fulldomain(
                 model, feat_mean, feat_std, params_6h, ny, nx, device,
-                cos_doy, sin_doy)
+                cos_doy, sin_doy, local_std=local_std_grid)
 
             for ithresh, thresh in enumerate(pthresholds):
                 prob = exceedance_prob(fz, mw, s1, sc1, s2, sc2, thresh)
