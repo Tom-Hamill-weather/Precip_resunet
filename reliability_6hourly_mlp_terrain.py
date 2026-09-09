@@ -23,6 +23,15 @@ Output: one cPickle per lead time,
 containing per-threshold, per-region BSS/contab for both the MLP and the
 independence-assumption control.
 
+Per-date results (the expensive part -- model forward pass + MRMS/control
+reads) are cached separately in
+    {relia_dir}/relia_6h_MLP_terrain_percache_lead{clead}h.cPick
+keyed by init time, so that widening the test date list (e.g. adding new
+GRAF cycles) only computes the new dates instead of recomputing the whole
+history. The per-date cache is invalidated wholesale if the MLP checkpoint's
+mtime has changed since it was written (a retrain makes every cached
+forward-pass result stale, not just the new dates').
+
 Tom Hamill, Aug 2026
 """
 
@@ -36,7 +45,9 @@ from netCDF4 import Dataset
 from reliability_6hourly_mlp_3panel import (
     get_paths, load_mlp, read_prob_params_6h, read_control_probs_6h,
     read_mrms_6h, apply_mlp_fulldomain, exceedance_prob, compute_contab_BS,
-    julian_features, build_test_datelist, load_local_std_grid,
+    julian_features, hour_of_day_features, build_test_datelist,
+    load_local_std_grid, load_terrain_grad_grids, read_texture_params_6h,
+    get_texture_dir, SCRIPT_DIR,
 )
 
 TERRAIN_MASK_NC = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -92,14 +103,45 @@ def main():
         relia_dir,
         f'relia_6h_MLP_terrain_q0.6_{date_start}_to_{date_end}_lead{clead}h{variant_suffix}.cPick')
 
+    ckpt_path = os.path.join(SCRIPT_DIR, 'mlp_trainings',
+                             f'6h_mlp_lead{clead}h{variant_suffix}.pth')
+    ckpt_mtime = os.path.getmtime(ckpt_path) if os.path.exists(ckpt_path) else None
+
+    # Validated against ckpt_mtime (not just existence) so a retrain under
+    # the same variant name doesn't silently serve stale results -- see the
+    # matching fix in reliability_6hourly_mlp_3panel.py for why this matters.
     if os.path.exists(pick_fname):
-        print(f'Cache already exists, skipping: {pick_fname}')
-        return
+        with open(pick_fname, 'rb') as fh:
+            cached_out_dict = cPickle.load(fh)
+        if cached_out_dict.get('ckpt_mtime') == ckpt_mtime:
+            print(f'Cache already exists, skipping: {pick_fname}')
+            return
+        else:
+            print(f'Cached statistics at {pick_fname} predate the current checkpoint '
+                  f'(stale after a retrain); recomputing.')
+
+    percache_fname = os.path.join(
+        relia_dir, f'relia_6h_MLP_terrain_percache_lead{clead}h{variant_suffix}.cPick')
+    percache = {'ckpt_mtime': ckpt_mtime, 'dates': {}}
+    if os.path.exists(percache_fname):
+        with open(percache_fname, 'rb') as fh:
+            loaded = cPickle.load(fh)
+        if loaded.get('ckpt_mtime') == ckpt_mtime:
+            percache = loaded
+            print(f'Loaded per-date cache: {len(percache["dates"])} dates '
+                  f'already computed ({percache_fname})')
+        else:
+            print(f'Per-date cache checkpoint mtime mismatch (stale after a '
+                  f'retrain) -- discarding {percache_fname}')
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'Torch device: {device}')
     model, feat_mean, feat_std = load_mlp(clead, device, variant=variant)
     local_std_grid = load_local_std_grid() if len(feat_mean) >= 39 else None
+    use_hod_feat   = len(feat_mean) >= 41
+    use_texture_feats = len(feat_mean) >= 73
+    terrain_grad_grids = load_terrain_grad_grids() if use_texture_feats else None
+    texture_dir = get_texture_dir() if use_texture_feats else None
 
     ndates = len(cyyyymmddhh_list)
     print(f'Total init times to process: {ndates}')
@@ -117,8 +159,34 @@ def main():
     nobs_total_sum = {r: {'mlp': np.zeros(nthresholds), 'control': np.zeros(nthresholds)}
                       for r in REGIONS}
     ngood = 0
+    ncached = 0
+    ncomputed = 0
+    SAVE_EVERY = 50
 
     for idate, cdate in enumerate(cyyyymmddhh_list):
+        cached = percache['dates'].get(cdate)
+        if cached is not None:
+            ngood += 1
+            ncached += 1
+            for region in REGIONS:
+                for ithresh in range(nthresholds):
+                    ctab_m, bs_m, ns_m, nex_m, ntot_m = cached[region]['mlp'][ithresh]
+                    contab[region]['mlp'][ithresh]          += ctab_m
+                    BS_sum[region]['mlp'][ithresh]          += bs_m
+                    nsamps_sum[region]['mlp'][ithresh]      += ns_m
+                    nobs_exceed_sum[region]['mlp'][ithresh] += nex_m
+                    nobs_total_sum[region]['mlp'][ithresh]  += ntot_m
+
+                    ctab_c, bs_c, ns_c, nex_c, ntot_c = cached[region]['control'][ithresh]
+                    contab[region]['control'][ithresh]          += ctab_c
+                    BS_sum[region]['control'][ithresh]          += bs_c
+                    nsamps_sum[region]['control'][ithresh]      += ns_c
+                    nobs_exceed_sum[region]['control'][ithresh] += nex_c
+                    nobs_total_sum[region]['control'][ithresh]  += ntot_c
+            if (idate + 1) % 100 == 0 or idate + 1 == ndates:
+                print(f'{idate+1:4d}/{ndates}  init={cdate}  (from per-date cache)')
+            continue
+
         params_6h, lat, lon = read_prob_params_6h(probs_dir, cdate, clead)
         prob_ok = params_6h is not None
 
@@ -128,21 +196,38 @@ def main():
         control_probs = read_control_probs_6h(control_dir, cdate, clead, PTHRESHOLDS)
         control_ok = control_probs is not None
 
+        if use_texture_feats:
+            texture_spatial, texture_temporal, raw_precip_6h = \
+                read_texture_params_6h(texture_dir, cdate, clead)
+            texture_ok = texture_spatial is not None
+        else:
+            texture_spatial = texture_temporal = raw_precip_6h = None
+            texture_ok = True
+
         ps = 'ok' if prob_ok else 'missing'
         ms = 'ok' if mrms_ok else 'missing'
         cs = 'ok' if control_ok else 'missing'
-        print(f'{idate+1:4d}/{ndates}  init={cdate}  params={ps}  mrms={ms}  control={cs}')
+        txs = 'ok' if texture_ok else 'missing'
+        print(f'{idate+1:4d}/{ndates}  init={cdate}  params={ps}  mrms={ms}  control={cs}  texture={txs}')
 
-        if not prob_ok or not mrms_ok or not control_ok:
+        if not prob_ok or not mrms_ok or not control_ok or not texture_ok:
             continue
 
         ny, nx = precip_6h.shape
         ngood += 1
+        ncomputed += 1
 
         cos_doy, sin_doy = julian_features(cdate)
+        cos_hod, sin_hod = (hour_of_day_features(cdate) if use_hod_feat
+                            else (None, None))
         fz, mw, s1, sc1, s2, sc2 = apply_mlp_fulldomain(
             model, feat_mean, feat_std, params_6h, ny, nx, device, cos_doy, sin_doy,
-            local_std=local_std_grid)
+            local_std=local_std_grid, cos_hod=cos_hod, sin_hod=sin_hod,
+            texture_spatial=texture_spatial, texture_temporal=texture_temporal,
+            raw_precip_6h=raw_precip_6h, terrain_grad=terrain_grad_grids)
+
+        date_result = {r: {'mlp': [None] * nthresholds, 'control': [None] * nthresholds}
+                       for r in REGIONS}
 
         for ithresh, thresh in enumerate(PTHRESHOLDS):
             prob_mlp = exceedance_prob(fz, mw, s1, sc1, s2, sc2, thresh)
@@ -158,6 +243,7 @@ def main():
                 nsamps_sum[region]['mlp'][ithresh]      += ns_m
                 nobs_exceed_sum[region]['mlp'][ithresh] += nex_m
                 nobs_total_sum[region]['mlp'][ithresh]  += ntot_m
+                date_result[region]['mlp'][ithresh] = (ctab_m, bs_m, ns_m, nex_m, ntot_m)
 
                 ctab_c, bs_c, ns_c, nex_c, ntot_c = compute_contab_BS(
                     ny, nx, prob_ctl, precip_6h, qual_region, NCATS, thresh)
@@ -166,6 +252,19 @@ def main():
                 nsamps_sum[region]['control'][ithresh]      += ns_c
                 nobs_exceed_sum[region]['control'][ithresh] += nex_c
                 nobs_total_sum[region]['control'][ithresh]  += ntot_c
+                date_result[region]['control'][ithresh] = (ctab_c, bs_c, ns_c, nex_c, ntot_c)
+
+        percache['dates'][cdate] = date_result
+
+        if ncomputed % SAVE_EVERY == 0:
+            with open(percache_fname, 'wb') as fh:
+                cPickle.dump(percache, fh)
+
+    if ncomputed > 0:
+        with open(percache_fname, 'wb') as fh:
+            cPickle.dump(percache, fh)
+    print(f'\nPer-date cache: {ncached} reused, {ncomputed} newly computed, '
+          f'{len(percache["dates"])} total cached -> {percache_fname}')
 
     if ngood == 0:
         print('\nERROR: No dates with complete data found.')
@@ -200,6 +299,7 @@ def main():
                   f'BSS_control={BSS[region]["control"][ithresh]:.3f}')
 
     out_dict = {
+        'ckpt_mtime': ckpt_mtime,
         'clead': clead,
         'pthresholds': PTHRESHOLDS,
         'ngood': ngood,

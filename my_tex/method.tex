@@ -14,6 +14,10 @@
 \usepackage{bm}
 \usepackage{float}
 
+\usepackage{lineno}
+\linenumbers
+
+
 % --- Custom commands ---
 \newcommand{\vect}[1]{\bm{#1}}
 \newcommand{\mat}[1]{\mathbf{#1}}
@@ -42,15 +46,16 @@ high-Resolution Atmospheric Forecasting) model along with terrain information an
 column-average relative humidity from the National Oceanic and
 Atmospheric Administration's (NOAA's) Global Forecast System (GFS).
 The target data are NOAA's Multi-Radar, Multi-Sensor (MRMS)
-gauge-corrected, quality controlled radar data sampled on the same grid as the GRAF data.
+gauge-corrected, quality controlled radar data sampled to the same grid as the GRAF data.
 The network outputs distributional parameters for each model grid point.
 Training uses negative log-likelihood as a proper scoring rule,
 with climatological initialization for stable convergence.
 Inference is performed as a single forward pass over the contiguous United States (CONUS)
 domain, with edge-replication padding to satisfy the network's spatial-divisibility
 requirement.  The subsequent
-forecasts are spatially detailed and highly reliable.  The method may be
-particularly useful for estimating probabilities in regions with large terrain variation.
+forecasts are spatially detailed, highly reliable, and skillful with respect to climatology and a simpler
+reference forecast method.  The method is particularly useful for estimating probabilities 
+in regions with large terrain variation.
 \end{abstract}
 
 % =====================================================================
@@ -170,17 +175,12 @@ conditions are not needed, yet still providing forecasts capable of modeling
 organized thunderstorms.   In 2026, GRAF makes forecasts every hour, with even-hour
 Coordinated Universal Time (UTC) initial-time forecasts to +72 h and odd-hour forecasts to +15 h.   Initial conditions
 are generated for each hour, using the most recently available European Centre for Medium-Range Weather Forecasts (ECMWF) analysis and then
-running a 3-D variational analysis procedure using the Joint Effort for Data assimilation 
-Integration (JEDI) software to update to recently available surface observations, rawinsonde,
-and radar reflectivity data.  GRAF data are disseminated to media, aviation, 
+running a 3-D variational analysis procedure \citep{lorenc1986} using the Joint Effort for Data assimilation
+Integration (JEDI) software \citep{tremolet2020, ha2022, park2023} to update to recently available surface observations, rawinsonde,
+and radar reflectivity data.  GRAF data are disseminated to media, aviation,
 consumer, agriculture, and energy customers.
 For this study, we will consider the calibration of probabilities only to +48 h lead time.
 
-% TODO: add specific 3D-Var and JEDI citations to the paragraph above.
-
-Before use in the Attention ResUNet, GRAF forecasts from the native mesh
-are interpolated to a 4-km grid covering the CONUS, southern Canada, and
-the Gulf of Mexico.
 
 \begin{figure}[H]
 \centering
@@ -205,7 +205,9 @@ from the Global Multi-resolution Terrain Elevation Data 2010
 MODIS (Moderate Resolution Imaging Spectroradiometer) at
 30\,arcsec grid spacing.
 
-
+Before use in the Attention ResUNet, GRAF forecasts from the native mesh
+are interpolated to a 4-km grid covering the CONUS, southern Canada, and
+the Gulf of Mexico.
 
 % =====================================================================
 \section{Neural Network, Data, and Training}
@@ -222,47 +224,51 @@ on $96 \times 96$ pixel patches extracted from
 the CONUS domain.  Each patch comprises seven input channels:
 
 \begin{enumerate}[label=(\arabic*)]
-  \item \textbf{GRAF precipitation forecast} ($g$): The raw
+  \item \textbf{GRAF precipitation forecast} ($g$): This is the raw
         model-predicted hourly accumulated precipitation (mm),
         transformed by a power function $g' = g^{p}$ with
-        $p = 0.5$ (square root) for variance stabilization
+        $p = 0.5$ (square root) to minimize training sensitivity to outliers 
+        and variance stabilization.
         (Section~\ref{sec:power}).
-  \item \textbf{Terrain elevation deviation} ($\Delta z$): The
+  \item \textbf{Terrain elevation deviation} ($\Delta z$): This is the
         difference between local terrain height and a smoothed
         representation of terrain height provided by a Gaussian
         convolution with a length scale of 15 grid points
         (Figure~\ref{fig:terrain_diff}), which facilitates
-        capturing local orographic variability.
+        definition of local orographic variability.
   \item \textbf{GFS column-average relative humidity} ($R$):
-        Large-scale moisture information from NOAA's Global Forecast
-        System (GFS) model, interpolated to the GRAF grid.
+        This provides large-scale moisture information from NOAA's Global Forecast
+        System (GFS) model, interpolated to the GRAF grid.  Ideally this would
+        be provided directly by the GRAF system, but we neglected to save
+        a long time series of these.  Use of this was found to help distinguish between
+        no probability of precipitation and small probability.
   \item \textbf{Precipitation--terrain interaction} ($g' \times
-        \Delta z$): Captures terrain-enhanced precipitation
+        \Delta z$): This was chosen to enhance potential terrain-enhanced precipitation
         processes (upslope enhancement, rain shadowing).
   \item \textbf{Precipitation--humidity interaction} ($g' \times
-        R$): Captures the modulation of precipitation forecasts by
-        the large-scale moisture environment.
+        R$): This is intended to help estimate the modulation of precipitation probability due
+        to the large-scale moisture environment.
   \item \textbf{Terrain gradient, zonal} ($\partial z / \partial
-        \lambda$): Longitude component of the terrain slope,
-        computed from the smoothed terrain height (Gaussian
-        convolution, 15 grid-point length scale, as in feature~(2)).
+        \lambda$): This is the longitudinal component of terrain slope, where terrain
+        elevation was smoothed with a Gaussian kernel with a length scale of 15 grid points.
+        This is intended to facilitate estimation of larger-scale terrain-induced precipitation.
   \item \textbf{Terrain gradient, meridional} ($\partial z /
-        \partial \phi$): Latitude component of the terrain slope,
-        likewise computed from the 15 grid-point smoothed terrain
-        height.
+        \partial \phi$): This is the latitudinal component of terrain slope, also smoothed.
 \end{enumerate}
 
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.85\textwidth]{GRAF_CONUS_terrain_height_difference.png}
-\caption{Terrain height differences in the western US, used as
-      a feature in the Attention ResUNet training.}
+\caption{Terrain height differences from a smoothed terrain representation shown 
+	in the western US, used as a feature in the Attention ResUNet training.  The difference
+	from smoothed terrain accentuates local elevation differences.}
 \label{fig:terrain_diff}
 \end{figure}
 
 Note that interaction terms (4) and (5) are computed \emph{after}
 the power transformation has been applied to the GRAF precipitation.
+
 The choice of features reflected what data were readily available. At TWCo,
 we have maintained an archive of hourly precipitation from GRAF dating back
 several years, but we did not archive long time series of other variables that
@@ -336,19 +342,19 @@ multi-sensor pass-2 product.  A collocated MRMS
 data-quality file provides a per-pixel quality index on a
 $[0,\,1]$ scale encoding sensor coverage and retrieval confidence.
 Both fields are remapped from the native MRMS 0.01$^{\circ}$
-($\approx$1\,km) grid to the GRAF CONUS grid ($\approx$4\,km
-spacing) using nearest-neighbor interpolation.
+($\approx$1\,km) grid to the GRAF CONUS grid ($\approx$4.25\,km
+spacing, hereafter "4 km") using nearest-neighbor interpolation.
 Nearest-neighbor interpolation was chosen over other alternatives
 such as performing the training at 1 km, bilinear interpolation to 4 km,
 or a conservative upscaling to the 4-km grid.
 Keeping the 1-km grid spacing would have
-increased training cost time for this preliminary study.
+increased training time for this preliminary study.
 Were the analyses upscaled to 4 km rather than
 sampling, the target data would not represent the local variability that we expect
 customers want in their probability forecasts.
 
 \paragraph{Quality masking.}
-Pixels with a quality index $\leq 0.01$ are treated as unreliable and are
+MRMS grid points with a quality index $\leq 0.01$ are treated as unreliable and are
 not used in the training. During patch extraction, potential 
 tiles in which more than 50\% of pixels fail this quality threshold
 are discarded from consideration as a training sample.  Within retained tiles, 
@@ -359,16 +365,17 @@ strategy preserves spatial coverage in partially contaminated tiles
 while preventing the network from learning from poor-quality radar
 retrievals.
 
-The quality threshold of 0.01 is admittedly non-restrictive.  Had we used
-a higher quality threshold such as 0.5, say, the target data would
+The quality threshold of 0.01 used in training is admittedly quite non-restrictive.  
+Had we used a higher quality threshold such as 0.5, say, the target data would
 be more trustworthy.   However, this would come at the expense of providing
 much less training data to the algorithm in the western US.  When
-quality is low due to problems like radar beam blockage, the target data
-is more reflective of the model background forecast provided by the
+quality is low due to problems like radar beam blockage, the target MRMS analysis
+data is more reflective of the model background forecast provided by the
 NOAA High-Resolution Rapid Refresh \citep[HRRR;][]{benjamin2016, dowell2022}.
-Because of this,
-in mountainous regions the precipitation analyses may reflect
-HRRR model bias, making a biased target for training.
+Because of this, in mountainous regions the precipitation analyses may reflect
+HRRR model bias, making a biased target for training.   Despite the low threshold
+for training, for model verification, we will limit the acceptable samples to those
+with quality $>$ 0.5.
 
 \subsubsection{Data sampling}
 \label{sec:sampling}
@@ -382,7 +389,14 @@ the initialization date; (3)~a 60-day window spanning approximately
 12--14 months before the initialization date; and (4)~a 60-day
 window spanning approximately 22--24 months before the
 initialization date.   Dates within each window are sampled with 
-initial conditions at 6-hourly intervals.
+initial conditions at 6-hourly intervals.  Separate trainings are conducted
+for every month of the year.
+
+Given the lead-time dependence of skill, a separate training is performed 
+every 3 h of forecast lead time from +3 h to +48 h.   To minimize training
+time, the training for 6-h forecasts, conducted after the training of 3-h 
+forecasts, start from the weight estimates from the +3 h training rather
+than from random initial weights.
 
 Patch data are randomized in several ways to prevent over-learning
 to terrain features.  First, the center locations of the patches on any given day being
@@ -591,8 +605,8 @@ Precipitation is highly localized, and large portions of any domain
 patch may be dry at any given time.  The attention map $\nu$ learns to
 suppress encoder features from dry, featureless regions,
 preventing them from diluting the decoder's representation
-of active precipitation areas.  In practice the learned
-$\nu$ maps cluster near zero over dry regions and near
+of active precipitation areas or areas with complex terrain (not shown).  
+In practice the learned $\nu$ maps cluster near zero over dry regions and near
 unity over precipitating or orographically active regions,
 consistent with this intended role.  Second, at the coarsest decoder
 scale ($12\times12$, corresponding to $\approx$384\,km),
@@ -1026,8 +1040,13 @@ Gradient clip norm & 1.0 & 2.0 \\
 \label{sec:inference}
 % ---------------------------------------------------------------------
 
+Since trainings were available only every three hours from lead times
+of +3 to +48 h, there were no trainings for many hours, such as hour one 
+of the forecast.   The 3-hour training weights whose lead time was nearest 
+to that of the lead time of interest were used, e.g., 3-hour trainings were used 
+for forecasts of lead times +1 to +4 h.
 
-The Attention Residual U-Net is fully convolutional---it contains no
+The trained Attention Residual U-Net is fully convolutional---it contains no
 linear or flatten layers, relying entirely on convolutional, pooling,
 and transposed-convolutional operations.  This means the network can
 accept inputs of arbitrary spatial size at inference time, provided
@@ -1046,8 +1065,6 @@ logits.  The output is cropped back to the native $1308 \times 1524$
 domain.  The outermost 16 rows and columns of the output are masked as
 missing, as they are influenced by the replicate-padded region and lack
 real-data context outside the domain boundary.
-
-
 
 After the single forward pass, the six raw logit fields are transformed to
 constrained distributional parameters (sigmoid for $p_0$ and $w$;
@@ -1096,9 +1113,9 @@ spatial detail of the GRAF forecast but yields overconfident
 probabilities clustered near 0 or 1; large $\sigma$ improves
 reliability at the expense of spatial resolution.  To identify the
 optimal $\sigma$, a range of values
-$\sigma \in \{3, 5, 7, 10, 15, 20, 25, 30, 40, 50, 60, 75\}$\,km
-were evaluated using the script
-\texttt{relia\_GRAF\_raw\_multisigma.py}.  For each $\sigma$, MRMS
+$\sigma \in \{3, 5, 7, 10, 15, 20, 25, 30, 40, 50, 60, 75\}$ grid points
+(GRAF's native grid spacing is $\approx$4.3\,km)
+were evaluated.  For each $\sigma$, MRMS
 observations over a held-out verification period were used to
 compute reliability diagrams and the Brier Score across all
 thresholds.  The value of $\sigma$ that produced approximately the
@@ -1117,7 +1134,7 @@ post-processing.
 
 Figure~\ref{fig:relia_sigma} shows reliability diagrams for the 12-h lead
 time and the 0.25-mm threshold using Jan-Dec 2025 and Gaussian-smoothed GRAF forecasts. 
-For this lead time and threshold, the selected value $\sigma = 15$\,km (Table~\ref{tab:sigma})
+For this lead time and threshold, the selected value $\sigma = 15$ grid points (Table~\ref{tab:sigma})
 produces the lowest BS and the most nearly diagonal reliability
 curve at this lead time.   Evaluating other thresholds and lead times, approximately
 optimal $\sigma$ were chosen, shown in Table~\ref{tab:sigma}.  Gaussian-smoothed probability
@@ -1131,7 +1148,7 @@ the Attention ResUNet.
   neighborhood probabilities of exceeding 0.25\,mm at 12\,h lead
   time, evaluated over January--December 2025.  Each curve
   corresponds to a different Gaussian smoothing standard deviation
-  $\sigma$ (km); Brier Score (BS) for each $\sigma$ is shown in the
+  $\sigma$ (grid points; GRAF's native grid spacing is $\approx$4.3\,km); Brier Score (BS) for each $\sigma$ is shown in the
   legend.  The diagonal dashed line indicates perfect reliability.
   }
 \label{fig:relia_sigma}
@@ -1141,13 +1158,14 @@ the Attention ResUNet.
 \centering
 \caption{Gaussian smoothing standard deviation $\sigma$ adopted for
   the raw-GRAF reference probability forecasts as a function of
-  forecast lead time.  Values were selected to minimize the
+  forecast lead time.  $\sigma$ is given in grid points on GRAF's
+  native $\approx$4.3-km grid.  Values were selected to minimize the
   aggregate Brier Score across thresholds $\tau \in \{0.25, 1.0,
   5.0, 10.0\}$\,mm over the 2025 verification period.}
 \label{tab:sigma}
 \begin{tabular}{lc}
 \toprule
-Lead time (h) & $\sigma$ (km) \\
+Lead time (h) & $\sigma$ (grid points) \\
 \midrule
 1--12    & 15 \\
 13--30   & 20 \\
@@ -1162,7 +1180,9 @@ Lead time (h) & $\sigma$ (km) \\
 % =====================================================================
 
 Forecast quality is assessed using MRMS (Multi-Radar Multi-Sensor)
-radar-derived precipitation as the verification truth.  Standard
+radar-derived precipitation as the verification truth.  Verification only uses samples where
+the MRMS hourly quality index is $\geq$ 0.5.   This will filter out many points in mountainous
+regions where there may be, for example, radar beam blockage.  Standard
 verification metrics are described in \citet{wilks2011} and include:
 \begin{itemize}
   \item \textbf{Reliability diagrams:} Plotting observed frequency
@@ -1171,6 +1191,10 @@ verification metrics are described in \citet{wilks2011} and include:
   \item \textbf{Brier Skill Score (BSS):} Measuring  the fractional improvement
         over climatological probabilities. 1 is the skill of a perfect forecast, 0 is the
         skill of the reference climatology.
+  \item \textbf{Performance diagrams:} Jointly displaying the probability of detection
+        and success ratio (1 minus the false alarm ratio) on a single set of axes, with
+        shaded background contours of the critical success index and dashed lines of
+        constant frequency bias \citep{roebber2009}.
 \end{itemize}
 
 % =====================================================================
@@ -1264,45 +1288,79 @@ forecasts are issued more often from the Attention ResUNet.
 \label{fig:relia_48h}
 \end{figure}
 
-Figure~\ref{fig:bss} shows the Brier Skill scores as a function of lead time.  Data are
-presented for the whole contiguous US as well as the western US, here defined as west of
-105$^{\circ}$W longitude.  For higher thresholds, the Attention ResUNet is notably more
-skillful, especially in the western US with its more mountainous terrain.  The one exception
-is the skill for 6-h forecasts of exceeding 5\,mm.  Through examination, it appears that
-the overall statistics are heavily influenced by one case in December 2025.  The 6-h forecast
-for this case (Fig.~\ref{fig:case_6h}) over-forecasts 5-mm probability, while the
-corresponding 12-h forecast verifying at the same time (Fig.~\ref{fig:case_12h}) does not.
-Through examination of forecast vs.\ MRMS observation scatterplots (not shown) there are not
-profound differences in the training data between the lead times.  It is possible there are
-subtle spin-up biases in the 6-h forecast that affect its quality that were not evident in
-scatterplots.
+Figure~\ref{fig:bss} shows the Brier Skill scores as a function of lead time, now stratified
+by local terrain roughness rather than by CONUS/western-US geography.  Roughness is defined
+from the GRAF terrain-height field as a local standard deviation, computed using the
+Gaussian-moments identity $\sigma_{\mathrm{local}} = \sqrt{G_\sigma(h^2) - G_\sigma(h)^2}$,
+where $h$ is terrain height and $G_\sigma$ denotes Gaussian smoothing with $\sigma = 14$ grid
+points ($\approx$60\,km on GRAF's $\sim$4.3-km grid).  The ``top 10\%'' terrain category
+comprises the grid points whose local standard deviation exceeds the 90th percentile of this
+quantity computed over all finite terrain points in the GRAF domain; the remaining points form
+the ``bottom 90\%'' category.  This is a substantially more direct measure of complex terrain
+than the West-of-105$^{\circ}$W criterion used earlier, and it reveals that the Attention
+ResUNet's advantage over the Gaussian-smoothed GRAF reference is concentrated in the roughest
+terrain: at every lead time and threshold, the BSS gap between the two forecasts is larger in
+the top-10\% category than in the bottom-90\% category.  This gap is most pronounced for the
+5\,mm exceedance threshold (Figs.~\ref{fig:bss}e,f), where the Attention ResUNet retains a BSS
+of roughly 0.10--0.20 over rough terrain through 48\,h, 25--55\% higher than the reference
+forecast's skill there depending on lead time, while over smoother terrain the two forecasts
+are closer together and both decay to a BSS below 0.10 by 48\,h.  The improvement over the reference forecast is
+smaller, though still consistent, for the 0.25 and 1.0\,mm thresholds.
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.7\textwidth]{bss.png}
 \caption{Brier Skill Score as a function of lead time for the Attention ResUNet (blue) and
-  Gaussian-smoothed GRAF reference (red), evaluated over CONUS (solid) and the western US
-  (west of 105$^{\circ}$W; dashed).  Results are shown for precipitation thresholds of
-  0.25, 1.0, 5.0, and 10.0\,mm.}
+  Gaussian-smoothed GRAF reference (red), stratified by local terrain roughness: (a,c,e)
+  the top 10\% roughest terrain and (b,d,f) the remaining bottom 90\% of terrain, as defined
+  in the text.  Rows show results for precipitation thresholds of (a,b) 0.25\,mm, (c,d)
+  1.0\,mm, and (e,f) 5.0\,mm.}
 \label{fig:bss}
 \end{figure}
 
+Performance diagrams \citep{roebber2009} provide a complementary view of forecast quality by
+jointly displaying the probability of detection (POD) and success ratio (SR, equal to 1 minus
+the false alarm ratio), with shaded background contours of the critical success index (CSI)
+and dashed lines of constant frequency bias.  For each of the top-10\% and bottom-90\% terrain
+categories defined above, curves are constructed by treating each of the 11 saved
+forecast-probability bins (0, 10, 20, \ldots, 100\%) as a probability threshold above which
+the forecast is counted as ``yes,'' and cumulating hit, false-alarm, and miss counts from that
+bin through the highest bin.  Figures~\ref{fig:perfdiag_p25} and \ref{fig:perfdiag_5mm} show
+these diagrams for the 0.25 and 5\,mm thresholds, respectively, with curves for the Attention
+ResUNet and Gaussian-smoothed GRAF reference at 6-, 24-, and 48-h lead times plotted together
+(distinguished by line style) on the same axes.  For the 0.25\,mm threshold, both forecasts
+trace out smooth, well-behaved curves, with the Attention ResUNet consistently shifted toward
+higher POD and higher SR (i.e., toward the upper right, higher-CSI corner of the diagram) than
+the reference forecast at every lead time, and with the top-10\% terrain category again
+showing the larger separation between the two forecasts.  For the 5\,mm threshold, the highest
+forecast-probability bins (above 50\%) are used so rarely, particularly by the reference
+forecast over the top-10\% roughest terrain, that the resulting points are dominated by
+sampling noise and produce a non-monotonic curve; those points (bins above 50\% forecast
+probability) are therefore omitted from Fig.~\ref{fig:perfdiag_5mm}.  Even with this
+truncation, the same pattern seen in the BSS results is evident: the Attention ResUNet
+maintains a higher POD than the reference forecast for a given SR at all three lead times,
+and the advantage is again largest over the top-10\% roughest terrain.
+
 \begin{figure}[H]
 \centering
-\includegraphics[width=\textwidth]{IC2025121506_lead6h_4panel.png}
-\caption{Four-panel verification plot for the 6-h Attention ResUNet forecast initialized at
-  1506 UTC 15 December 2025.  Panels show (a) raw GRAF precipitation forecast, (b) Attention
-  ResUNet probability of exceeding 5\,mm, (c) Gaussian-smoothed GRAF reference probability,
-  and (d) MRMS observed precipitation.}
-\label{fig:case_6h}
+\includegraphics[width=\textwidth]{perfdiagram_0.25mm.png}
+\caption{Performance diagrams (probability of detection vs.\ success ratio, with shaded
+  critical success index and dashed frequency-bias contours) for the 0.25\,mm exceedance
+  threshold, for (a) the top 10\% roughest terrain and (b) the bottom 90\% of terrain.  Curves
+  show the Attention ResUNet (blue) and Gaussian-smoothed GRAF reference (red) at 6-h (solid),
+  24-h (dashed), and 48-h (dotted) lead times, with each curve built by cumulating
+  contingency-table counts across forecast-probability bins from 0 to 100\% in 10\% increments.}
+\label{fig:perfdiag_p25}
 \end{figure}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=\textwidth]{IC2025121500_lead12h_4panel.png}
-\caption{As in Fig.~\ref{fig:case_6h}, but for the 12-h forecast initialized at 0000 UTC
-  15 December 2025, verifying at the same valid time.}
-\label{fig:case_12h}
+\includegraphics[width=\textwidth]{perfdiagram_5mm.png}
+\caption{As in Fig.~\ref{fig:perfdiag_p25}, but for the 5\,mm exceedance threshold.
+  Forecast-probability bins above 50\% are omitted because they are used too rarely at this
+  threshold, particularly by the reference forecast over the top-10\% roughest terrain, for
+  the resulting POD/SR estimates to be statistically meaningful.}
+\label{fig:perfdiag_5mm}
 \end{figure}
 
 % =====================================================================
@@ -1311,9 +1369,9 @@ scatterplots.
 % =====================================================================
 
 We have described a probabilistic precipitation forecasting algorithm for the statistical
-postprocessing of deterministic forecast model output, in this case to 4-km deterministic
+postprocessing of deterministic forecast model output, in this case applied to 4-km deterministic
 forecast guidance produced by TWCo's GRAF model, based on the MPAS system. This method
-combines an Attention Residual U-Net to produce at each point a probability distribution
+uses an Attention Residual U-Net to produce at each point a probability distribution
 from a zero-inflated mixture of two Gamma distributions.  Key design choices include:
 \begin{itemize}
   \item A \emph{two-component Gamma mixture} that accommodates both
@@ -1354,13 +1412,22 @@ four times daily, but no other forecast fields, nor data from the every-hour pro
 were missing other helpful predictive features such as column relative humidity directly from GRAF, or
 the use of lagged ensemble forecasts to improve the potential predictive skill, understanding
 what features were consistent from run to run and which differed.  These deficiencies,
-time permitting, may be addressed in future work.
+time permitting, may be addressed in future work, or the method may be applied to other models
+with richer training data sets.
+
+Finally, it's likely the training procedure could be improved,
+for example with training methods like FiLM \citep{perez2017} to still
+extract lead-time dependent skill with training data pooled over multiple lead times.
+
+% =====================================================================
+\section*{Acknowledgments}
+% =====================================================================
+
+Trevor Alcott is thanked for his comprehensive internal review of this manuscript.
 
 % =====================================================================
 % REFERENCES
 % =====================================================================
-
-\bibliographystyle{ametsoc2014}
 
 \begin{thebibliography}{99}
 
@@ -1459,6 +1526,13 @@ Gneiting, T., and A.~E.\ Raftery, 2007:
 Strictly proper scoring rules, prediction, and estimation.
 \textit{J.\ Amer.\ Statist.\ Assoc.}, \textbf{102}, 359--378.
 
+\bibitem[Ha \textit{et al.}(2022)]{ha2022}
+Ha, S., and Coauthors, 2022:
+Joint Effort for Data Assimilation Integration (JEDI-MPAS 1.0.0):
+EnVar implementation and evaluation.
+\textit{Geosci.\ Model Dev.}, \textbf{15}, 7859--7876,
+doi:10.5194/gmd-15-7859-2022.
+
 \bibitem[Hamill \textit{et al.}(2004)]{hamill2004}
 Hamill, T.~M., J.~S.\ Whitaker, and X.\ Wei, 2004:
 Ensemble reforecasting: Improving medium-range forecast skill
@@ -1550,6 +1624,12 @@ The NCEP Stage II/IV hourly precipitation analyses: Development and applications
 Preprints, \textit{19th Conf.\ on Hydrology}, San Diego, CA, Amer.\ Meteor.\ Soc.,
 1.2.
 
+\bibitem[Lorenc(1986)]{lorenc1986}
+Lorenc, A.~C., 1986:
+Analysis methods for numerical weather prediction.
+\textit{Quart.\ J.\ Roy.\ Meteor.\ Soc.}, \textbf{112}, 1177--1194,
+doi:10.1002/qj.49711247414.
+
 \bibitem[Messner and Mayr(2014)]{messner2014}
 Messner, J.~W., and G.~J.\ Mayr, 2014:
 Heteroscedastic extended logistic regression for postprocessing of
@@ -1581,6 +1661,19 @@ Oktay, O., and Coauthors, 2018:
 Attention U-Net: Learning where to look for the pancreas.
 \textit{arXiv preprint arXiv:1804.03999}.
 
+\bibitem[Park \textit{et al.}(2023)]{park2023}
+Park, J., M.\ Xue, and C.\ Liu, 2023:
+Implementation and testing of radar data assimilation capabilities within the
+Joint Effort for Data Assimilation Integration framework with Ensemble
+Transformation Kalman Filter coupled with FV3-LAM model.
+\textit{J.\ Adv.\ Model.\ Earth Syst.}, \textbf{15}, e2022MS003504,
+doi:10.1029/2022MS003504.
+
+\bibitem[Perez \textit{et al.}(2017)]{perez2017}
+Perez, E., F.\ Strub, H.\ De Vries, V.\ Dumoulin, and A.\ Courville, 2017:
+FiLM: Visual reasoning with a general conditioning layer.
+\textit{arXiv preprint}, arXiv:1709.07871.
+
 \bibitem[Radford \textit{et al.}(2023)]{radford2023}
 Radford, J.~T., G.~M.\ Lackmann, J.\ Goodwin, J.\ Correia,
 and K.\ Harnos, 2023:
@@ -1610,6 +1703,12 @@ Scale-selective verification of rainfall accumulations from high-resolution
 forecasts of convective events.
 \textit{Mon.\ Wea.\ Rev.}, \textbf{136}, 78--97,
 doi:10.1175/2007MWR2123.1.
+
+\bibitem[Roebber(2009)]{roebber2009}
+Roebber, P.~J., 2009:
+Visualizing multiple measures of forecast quality.
+\textit{Wea.\ Forecasting}, \textbf{24}, 601--608,
+doi:10.1175/2008WAF2222159.1.
 
 \bibitem[Ronneberger \textit{et al.}(2015)]{ronneberger2015}
 Ronneberger, O., P.\ Fischer, and T.\ Brox, 2015:
@@ -1666,6 +1765,12 @@ Probabilistic precipitation forecasts from a deterministic model:
 A pragmatic approach.
 \textit{Meteor.\ Appl.}, \textbf{12}, 257--268,
 doi:10.1017/S1350482705001763.
+
+\bibitem[Tr\'emolet and Aulign\'e(2020)]{tremolet2020}
+Tr\'emolet, Y., and T.\ Aulign\'e, 2020:
+The Joint Effort for Data Assimilation Integration (JEDI).
+\textit{JCSDA Quarterly}, No.~66, Joint Center for Satellite Data Assimilation, 2--7,
+doi:10.25923/5488-8860.
 
 \bibitem[Wang(2022)]{wang2022}
 Wang, W., 2022:

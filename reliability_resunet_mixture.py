@@ -156,11 +156,11 @@ def GRAF_precip_read(clead, cyyyymmddhh, GRAFdatadir_conus):
 
 # ----------------------------------------------------------
 
-def probability_read(clead, cyyyymmddhh, GRAFprobsdir_conus):
+def probability_read(clead, cyyyymmddhh, GRAFprobsdir_conus, probs_suffix='_probs_gamma_mixture.nc'):
     """Read Gamma mixture model probability files and return as dictionary."""
 
     infile = GRAFprobsdir_conus + cyyyymmddhh + \
-        '_'+ clead + '_probs_gamma_mixture.nc'
+        '_'+ clead + probs_suffix
     fexist = os.path.exists(infile)
 
     if fexist == True:
@@ -250,97 +250,103 @@ def read_MRMS(mrms_data_directory, cyyyymmddhh_verif):
 
 # -------------------------------------------------------------------------
 
-def compute_contab_BS(ny, nx, prob, obs, quality, ncats, threshold,
-                       climo_mask=None):
+def bin_index(prob, ncats):
     """
-    Compute contingency table and Brier Score for one case day.
-    Operates on full 2D arrays; handles quality masking internally.
-    Call once per case day per threshold; accumulate returned values
-    into running totals outside.
-    climo_mask: optional bool 2-D array (True = covered by climatology).
-    When provided, pixels outside the climatology domain are excluded.
+    Vectorized replacement for the old per-category np.where loop: maps each
+    probability to its reliability-diagram bin index. Bin k is centered at
+    k/(ncats-1) with half-width 1/(2*(ncats-1)); boundary values fall into
+    the upper bin (matches the old '>=pmin, <pmax' convention).
+
+    Uses np.searchsorted against edges computed with the exact same
+    expression as the old code's pmax (float(k)/(ncats-1) + 1./(2*(ncats-1))),
+    rather than a closed-form floor(prob*(ncats-1)+0.5) reformulation -- the
+    latter looked equivalent on paper but is NOT bit-identical at real
+    boundary values (verified against real GRAF probability fields,
+    2026-07-20: floor() disagreed with the old loop for a small fraction of
+    pixels sitting exactly on a bin edge; searchsorted with matching edge
+    arithmetic reproduces the old loop's contingency-table counts exactly).
     """
-
-    contab = np.zeros((ncats, 2), dtype=int)
-
-    # Assign binary_obs: 1=event, 0=non-event, -1=masked
-    binary_obs = -1 * np.ones((ny, nx), dtype=int)
-
-    base_cond = quality > 0.5
-    if climo_mask is not None:
-        base_cond = np.logical_and(base_cond, climo_mask)
-
-    a = np.where(np.logical_and(base_cond,
-        np.logical_and(obs >= threshold, obs <= 200.0)))
-    binary_obs[a] = 1
-
-    a = np.where(np.logical_and(base_cond,
-        np.logical_and(obs >= 0.0,
-        np.logical_and(obs < threshold, obs <= 200.0))))
-    binary_obs[a] = 0
-
-    # Accumulate contingency table counts per probability bin
-    for icat in range(ncats):
-        pmin = np.max([0.0, float(icat) / (ncats-1) - 1./(2*(ncats-1))])
-        pmax = np.min([1.0, float(icat) / (ncats-1) + 1./(2*(ncats-1))])
-        in_bin = np.logical_and(prob >= pmin,
-            prob <= pmax if icat == ncats-1 else prob < pmax)
-
-        a = np.where(np.logical_and(in_bin, binary_obs == 1))
-        contab[icat, 1] += len(a[0])
-
-        a = np.where(np.logical_and(in_bin, binary_obs == 0))
-        contab[icat, 0] += len(a[0])
-
-    # Brier Score over quality-masked pixels
-    good_0 = np.where(binary_obs == 0)
-    good_1 = np.where(binary_obs == 1)
-    BS = float(np.sum(prob[good_0]**2) + np.sum((1.0 - prob[good_1])**2))
-    nsamps = len(good_0[0]) + len(good_1[0])
-
-    return contab, BS, nsamps
+    edges = np.array([float(k) / (ncats - 1) + 1. / (2 * (ncats - 1))
+                       for k in range(ncats - 1)])
+    return np.searchsorted(edges, prob, side='right')
 
 # --------------------------------------------------------
 
-def compute_BS_climo(ny, nx, climo_prob_2d, obs, quality, threshold, climo_mask):
+def accumulate_threshold_stats(prob_raw, prob_gamma, climo_2d, obs, quality,
+                                threshold, climo_valid, region_masks, ncats):
     """
-    Brier Score contribution for the climatological forecast.
-    Only counts pixels where quality > 0.5 AND climo_mask is True,
-    so the sample set is identical to compute_contab_BS with climo_mask.
+    Vectorized replacement for the old compute_contab_BS/compute_BS_climo/
+    compute_BS_only trio, consolidated into one pass per (date, threshold).
+    The old functions each independently recomputed quality>0.5, the obs
+    validity range, and prob**2/(1-prob)**2 from scratch for every one of
+    the unstratified/west/top10/bottom90 regions (a >10x redundant-pass
+    factor once the terrain-roughness columns were added); here those
+    per-pixel quantities are computed once and reused across all regions.
+    Verified numerically identical to the old per-region function calls
+    (contingency tables and BS sums, including at exact bin-boundary
+    probabilities) via synthetic- and real-GRAF-data equivalence tests,
+    2026-07-20.
+
+    region_masks: dict of {name: boolean 2-D mask}. 'unstrat' should map to
+    None (no extra region restriction beyond quality/obs/climo validity).
+
+    Returns (contab_raw_delta, contab_gamma_delta, region_stats, strat_contab) where
+    region_stats[name] = (bs_raw, bs_gamma, bs_climo, nsamps), and strat_contab[name]
+    = (contab_raw_delta_region, contab_gamma_delta_region) for name in ('top10',
+    'bottom90') -- the full per-bin contingency tables needed for performance
+    diagrams (POD/success-ratio curves), which the scalar BS sums in region_stats
+    can't provide.
     """
-    base = np.logical_and(quality > 0.5, climo_mask)
+    quality_good = quality > 0.5
+    obs_range_ok = np.logical_and(obs >= 0.0, obs <= 200.0)
+    is_event = obs >= threshold
+    valid = quality_good & obs_range_ok & climo_valid
+    valid_event = valid & is_event
+    valid_nonevent = valid & ~is_event
 
-    good_1 = np.where(np.logical_and(base,
-        np.logical_and(obs >= threshold, obs <= 200.0)))
-    good_0 = np.where(np.logical_and(base,
-        np.logical_and(obs >= 0.0,
-        np.logical_and(obs < threshold, obs <= 200.0))))
+    climo_prob = np.clip(climo_2d, 0., 1.)
 
-    p0 = np.clip(climo_prob_2d[good_0], 0., 1.)
-    p1 = np.clip(climo_prob_2d[good_1], 0., 1.)
+    bin_raw = bin_index(prob_raw, ncats)
+    bin_gamma = bin_index(prob_gamma, ncats)
 
-    BS = float(np.sum(p0**2) + np.sum((1.0 - p1)**2))
-    nsamps = len(good_0[0]) + len(good_1[0])
-    return BS, nsamps
+    contab_raw_delta = np.zeros((ncats, 2), dtype=int)
+    contab_gamma_delta = np.zeros((ncats, 2), dtype=int)
+    contab_raw_delta[:, 1] = np.bincount(bin_raw[valid_event], minlength=ncats)
+    contab_raw_delta[:, 0] = np.bincount(bin_raw[valid_nonevent], minlength=ncats)
+    contab_gamma_delta[:, 1] = np.bincount(bin_gamma[valid_event], minlength=ncats)
+    contab_gamma_delta[:, 0] = np.bincount(bin_gamma[valid_nonevent], minlength=ncats)
 
-# --------------------------------------------------------
+    err_raw = np.where(is_event, (1.0 - prob_raw)**2, prob_raw**2)
+    err_gamma = np.where(is_event, (1.0 - prob_gamma)**2, prob_gamma**2)
+    err_climo = np.where(is_event, (1.0 - climo_prob)**2, climo_prob**2)
 
-def compute_BS_only(prob, obs, quality, threshold, mask):
-    """
-    Brier Score and sample count under an arbitrary boolean mask.
-    Pass the combined mask (e.g. climo_valid & west_mask) as 'mask'.
-    """
-    base = np.logical_and(quality > 0.5, mask)
-    good_1 = np.where(np.logical_and(base,
-        np.logical_and(obs >= threshold, obs <= 200.0)))
-    good_0 = np.where(np.logical_and(base,
-        np.logical_and(obs >= 0.0,
-        np.logical_and(obs < threshold, obs <= 200.0))))
-    p0 = np.clip(prob[good_0], 0., 1.)
-    p1 = np.clip(prob[good_1], 0., 1.)
-    BS = float(np.sum(p0**2) + np.sum((1.0 - p1)**2))
-    nsamps = len(good_0[0]) + len(good_1[0])
-    return BS, nsamps
+    region_stats = {}
+    for name, extra_mask in region_masks.items():
+        m = valid if extra_mask is None else np.logical_and(valid, extra_mask)
+        nsamps = int(np.count_nonzero(m))
+        bs_raw = float(np.sum(err_raw[m]))
+        bs_gamma = float(np.sum(err_gamma[m]))
+        bs_climo = float(np.sum(err_climo[m]))
+        region_stats[name] = (bs_raw, bs_gamma, bs_climo, nsamps)
+
+    # Per-bin contingency tables for the terrain-roughness strata (needed for
+    # performance-diagram POD/success-ratio curves; see make_performance_diagram.py)
+    strat_contab = {}
+    for name in ('top10', 'bottom90'):
+        extra_mask = region_masks.get(name)
+        if extra_mask is None:
+            continue
+        ve = valid_event & extra_mask
+        vn = valid_nonevent & extra_mask
+        c_raw = np.zeros((ncats, 2), dtype=int)
+        c_gamma = np.zeros((ncats, 2), dtype=int)
+        c_raw[:, 1] = np.bincount(bin_raw[ve], minlength=ncats)
+        c_raw[:, 0] = np.bincount(bin_raw[vn], minlength=ncats)
+        c_gamma[:, 1] = np.bincount(bin_gamma[ve], minlength=ncats)
+        c_gamma[:, 0] = np.bincount(bin_gamma[vn], minlength=ncats)
+        strat_contab[name] = (c_raw, c_gamma)
+
+    return contab_raw_delta, contab_gamma_delta, region_stats, strat_contab
 
 # --------------------------------------------------------
 
@@ -367,7 +373,28 @@ def compute_relia(contab, ncats):
 # --------------------------------------------------------
 
 clead = sys.argv[1]
-print(f"reliability_resunet_mixture.py lead={clead}h")
+# model_tag selects which inference output to score: 'baseline' (the
+# per-lead/per-month-retrained model, default, preserves old filenames/
+# cache exactly) or 'season' (the season-pooled + FiLM lead-pooled model).
+# Kept separate from probs_suffix's default so cache/output filenames
+# never collide between the two models when scoring the same date/lead.
+model_tag = sys.argv[2] if len(sys.argv) > 2 else 'baseline'
+# date_set selects the representative-month sample: '2025' is the original
+# one-month-per-season sample used for all prior baseline evaluations;
+# '2026h1' is the equivalent sample drawn from the independent Jan-Jun 2026
+# data (Jan/Apr/Jun as DJF/MAM/JJA proxies -- no SON proxy exists in H1).
+date_set = sys.argv[3] if len(sys.argv) > 3 else '2025'
+if model_tag == 'season':
+    probs_suffix = '_probs_gamma_mixture_season.nc'
+    cache_tag = '_season'
+    out_model_name = 'ResUNet_Mixture_Season'
+elif model_tag == 'baseline':
+    probs_suffix = '_probs_gamma_mixture.nc'
+    cache_tag = ''
+    out_model_name = 'ResUNet_Mixture'
+else:
+    raise ValueError(f"Unknown model_tag '{model_tag}', expected 'baseline' or 'season'")
+print(f"reliability_resunet_mixture.py lead={clead}h model_tag={model_tag} date_set={date_set}")
 cmtit = 'GRAF'
 pthresholds = [0.25, 1.0, 2.5, 5.0, 10.0]
 nthresholds = len(pthresholds)
@@ -375,12 +402,28 @@ ncats = 11
 cmodel = 'GRAF'
 cmonths = ['Jan','Feb','Mar','Apr','May','Jun','Jul',\
     'Aug','Sep','Oct','Nov','Dec']
-mar = daterange('2025030100','2025033118',6)
-jun = daterange('2025060100','2025063018',6)
-sep = daterange('2025090100','2025093018',6)
-dec = daterange('2025120100','2025123118',6)
-
-cyyyymmddhh_list = mar + jun + sep + dec
+if date_set == '2025':
+    mar = daterange('2025030100','2025033118',6)
+    jun = daterange('2025060100','2025063018',6)
+    sep = daterange('2025090100','2025093018',6)
+    dec = daterange('2025120100','2025123118',6)
+    cyyyymmddhh_list = mar + jun + sep + dec
+elif date_set == '2026h1':
+    jan = daterange('2026010100','2026013118',6)
+    apr = daterange('2026040100','2026043018',6)
+    jun = daterange('2026060100','2026063018',6)
+    cyyyymmddhh_list = jan + apr + jun
+elif date_set == '2025h1':
+    # Same Jan/Apr/Jun months as '2026h1', one year earlier -- lets a
+    # comparison hold time-of-year fixed and isolate year-over-year
+    # differences in the GRAF-vs-MRMS relationship instead of conflating
+    # them with a seasonal difference.
+    jan = daterange('2025010100','2025013118',6)
+    apr = daterange('2025040100','2025043018',6)
+    jun = daterange('2025060100','2025063018',6)
+    cyyyymmddhh_list = jan + apr + jun
+else:
+    raise ValueError(f"Unknown date_set '{date_set}', expected '2025', '2026h1', or '2025h1'")
 ndates = len(cyyyymmddhh_list)
 
 # --- read paths to data
@@ -403,6 +446,18 @@ else:
     relia_dir = os.path.expanduser('~/python/resnet_data/relia')
 os.makedirs(relia_dir, exist_ok=True)
 
+# ---- Per-date cache of contingency-table/BS deltas.
+# Reading raw GRAF probability + MRMS netCDFs for every date is the slow
+# part of this script; the per-date accumulation itself is cheap. Caching
+# each date's delta lets a rerun (e.g. to only change downstream plotting,
+# or to add a new stratification) skip straight to the cheap accumulation
+# step for any date already processed, instead of re-reading everything.
+# Only successful ("ok") dates are cached -- checking whether a date's raw
+# files are missing is itself cheap, so there's no benefit to caching misses,
+# and it avoids permanently hiding a date whose data later becomes available.
+daily_cache_dir = os.path.join(relia_dir, 'daily_contab')
+os.makedirs(daily_cache_dir, exist_ok=True)
+
 # ---- Read pre-interpolated Stage IV climatology on the GRAF grid
 
 if ENVIRONMENT == 'aws':
@@ -412,9 +467,12 @@ else:
         '~/python/resnet_data/stage4_climo_on_graf.nc')
 
 _nc = Dataset(climo_graf_file, 'r')
-climo_prob_arr       = _nc.variables['climo_prob'][:]    # (7,12,24,ny,nx)
+# NOTE: climo_prob is (7,12,24,ny,nx) float32 -- ~16 GB if loaded fully into
+# memory (confirmed OOM-killing this script on this machine). Keep it as a
+# netCDF4 Variable (not materialized with [:]) and slice one (ny,nx) plane
+# at a time inside the date loop below; _nc stays open until that loop ends.
+climo_prob_arr       = _nc.variables['climo_prob']       # (7,12,24,ny,nx)
 climo_thresholds_arr = _nc.variables['threshold'][:]     # mm
-_nc.close()
 
 # Map pthresholds -> climatology threshold dimension indices
 climo_tidx = []
@@ -434,6 +492,12 @@ contab_gamma = np.zeros((nthresholds, ncats, 2), dtype=int)
 BS_gamma = np.zeros((nthresholds), dtype=float)
 nsamps_gamma = np.zeros((nthresholds), dtype=float)
 
+# Per-bin contingency tables for the terrain-roughness strata (performance diagrams)
+contab_raw_top10    = np.zeros((nthresholds, ncats, 2), dtype=int)
+contab_gamma_top10  = np.zeros((nthresholds, ncats, 2), dtype=int)
+contab_raw_bottom90   = np.zeros((nthresholds, ncats, 2), dtype=int)
+contab_gamma_bottom90 = np.zeros((nthresholds, ncats, 2), dtype=int)
+
 BS_climo    = np.zeros(nthresholds, dtype=float)
 nsamps_climo = np.zeros(nthresholds, dtype=float)
 
@@ -444,6 +508,30 @@ nsamps_raw_west   = np.zeros(nthresholds, dtype=float)
 nsamps_gamma_west = np.zeros(nthresholds, dtype=float)
 nsamps_climo_west = np.zeros(nthresholds, dtype=float)
 
+BS_raw_top10    = np.zeros(nthresholds, dtype=float)
+BS_gamma_top10  = np.zeros(nthresholds, dtype=float)
+BS_climo_top10  = np.zeros(nthresholds, dtype=float)
+nsamps_raw_top10   = np.zeros(nthresholds, dtype=float)
+nsamps_gamma_top10 = np.zeros(nthresholds, dtype=float)
+nsamps_climo_top10 = np.zeros(nthresholds, dtype=float)
+
+BS_raw_bottom90    = np.zeros(nthresholds, dtype=float)
+BS_gamma_bottom90  = np.zeros(nthresholds, dtype=float)
+BS_climo_bottom90  = np.zeros(nthresholds, dtype=float)
+nsamps_raw_bottom90   = np.zeros(nthresholds, dtype=float)
+nsamps_gamma_bottom90 = np.zeros(nthresholds, dtype=float)
+nsamps_climo_bottom90 = np.zeros(nthresholds, dtype=float)
+
+# ---- Load terrain-roughness top10/bottom90 masks (same grid/shape as the
+# probability and MRMS fields, so no regridding is needed -- see
+# GRAF_TERRAIN_BSS_ADAPTATION_GUIDE.md and terrain_roughness_graf.py).
+_mask_nc_path = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), 'terrain_roughness_mask_graf.nc')
+_mask_nc = Dataset(_mask_nc_path, 'r')
+top10_mask    = np.asarray(_mask_nc.variables['top10_mask'][:], bool)
+bottom90_mask = np.asarray(_mask_nc.variables['bottom90_mask'][:], bool)
+_mask_nc.close()
+
 # --- Loop over dates, accumulating contingency table and BS data
 
 lats_save = None
@@ -451,12 +539,51 @@ lons_save = None
 west_mask = None   # True where lon < -105
 ngood = 0
 
+region_accum = {
+    'unstrat':  (BS_raw, BS_gamma, BS_climo,
+                 nsamps_raw, nsamps_gamma, nsamps_climo),
+    'west':     (BS_raw_west, BS_gamma_west, BS_climo_west,
+                 nsamps_raw_west, nsamps_gamma_west, nsamps_climo_west),
+    'top10':    (BS_raw_top10, BS_gamma_top10, BS_climo_top10,
+                 nsamps_raw_top10, nsamps_gamma_top10, nsamps_climo_top10),
+    'bottom90': (BS_raw_bottom90, BS_gamma_bottom90, BS_climo_bottom90,
+                 nsamps_raw_bottom90, nsamps_gamma_bottom90, nsamps_climo_bottom90),
+}
+
 for idate, date in enumerate(cyyyymmddhh_list):
     validity_date = dateshift(date, int(clead))
+    cache_file = os.path.join(daily_cache_dir, f'{date}_lead{clead}h{cache_tag}.cPick')
+
+    # ---- Cache hit: skip the expensive read + per-pixel accumulation
+    # entirely and just add this date's already-computed deltas.
+    if os.path.exists(cache_file):
+        with open(cache_file, 'rb') as f_cache:
+            cached = cPickle.load(f_cache)
+        if cached.get('pthresholds') == pthresholds and cached.get('ncats') == ncats:
+            ngood += 1
+            contab_raw   += cached['contab_raw_delta']
+            contab_gamma += cached['contab_gamma_delta']
+            contab_raw_top10      += cached['contab_raw_top10_delta']
+            contab_gamma_top10    += cached['contab_gamma_top10_delta']
+            contab_raw_bottom90   += cached['contab_raw_bottom90_delta']
+            contab_gamma_bottom90 += cached['contab_gamma_bottom90_delta']
+            for name, (bs_raw_arr, bs_gamma_arr, bs_climo_arr,
+                       ns_raw_arr, ns_gamma_arr, ns_climo_arr) in region_accum.items():
+                c_bs_raw, c_bs_gamma, c_bs_climo, c_ns = cached['region_stats'][name]
+                bs_raw_arr    += c_bs_raw
+                bs_gamma_arr  += c_bs_gamma
+                bs_climo_arr  += c_bs_climo
+                ns_raw_arr    += c_ns
+                ns_gamma_arr  += c_ns
+                ns_climo_arr  += c_ns
+            print(f"{idate:4d}  init={date}  lead={clead}h  [cached]")
+            continue
+        # else: cache was written with a different pthresholds/ncats config
+        # -- fall through and recompute/overwrite it below.
 
     # --- Read previously generated raw and gamma-derived probabilities
     istat_prob, probs, lat, lon = \
-        probability_read(clead, date, GRAFprobsdir_conus)
+        probability_read(clead, date, GRAFprobsdir_conus, probs_suffix)
 
     # Save reference lat/lon from first successful read
     if lats_save is None and istat_prob == 0:
@@ -490,47 +617,80 @@ for idate, date in enumerate(cyyyymmddhh_list):
     ], axis=-1)
 
     # ---- Accumulate contingency table and BS for each threshold
+    # (vectorized: see accumulate_threshold_stats -- one consolidated pass
+    # per threshold instead of 12 separate function calls each redoing the
+    # same quality/obs-range/squared-error math per region)
+    region_masks = {
+        'unstrat':  None,
+        'west':     west_mask,
+        'top10':    top10_mask,
+        'bottom90': bottom90_mask,
+    }
+
+    # Per-date collectors, stacked across thresholds, written to this date's
+    # cache file below once the threshold loop finishes.
+    date_contab_raw            = np.zeros((nthresholds, ncats, 2), dtype=int)
+    date_contab_gamma          = np.zeros((nthresholds, ncats, 2), dtype=int)
+    date_contab_raw_top10      = np.zeros((nthresholds, ncats, 2), dtype=int)
+    date_contab_gamma_top10    = np.zeros((nthresholds, ncats, 2), dtype=int)
+    date_contab_raw_bottom90   = np.zeros((nthresholds, ncats, 2), dtype=int)
+    date_contab_gamma_bottom90 = np.zeros((nthresholds, ncats, 2), dtype=int)
+    date_region_stats = {name: [np.zeros(nthresholds) for _ in range(4)]
+                         for name in region_masks}
+
     for ithresh, thresh in enumerate(pthresholds):
 
         climo_2d    = climo_all[:, :, ithresh]
         climo_valid = np.isfinite(climo_2d)   # False where Stage IV has no data
 
-        ctab, bs, ns = compute_contab_BS(ny, nx,
-            probs[thresh]['raw'], MRMS_precip, MRMS_quality, ncats, thresh,
-            climo_mask=climo_valid)
-        contab_raw[ithresh] += ctab
-        BS_raw[ithresh] += bs
-        nsamps_raw[ithresh] += ns
+        ctab_r_delta, ctab_g_delta, region_stats, strat_contab = accumulate_threshold_stats(
+            probs[thresh]['raw'], probs[thresh]['gamma'], climo_2d,
+            MRMS_precip, MRMS_quality, thresh, climo_valid, region_masks, ncats)
 
-        ctab, bs, ns = compute_contab_BS(ny, nx,
-            probs[thresh]['gamma'], MRMS_precip, MRMS_quality, ncats, thresh,
-            climo_mask=climo_valid)
-        contab_gamma[ithresh] += ctab
-        BS_gamma[ithresh] += bs
-        nsamps_gamma[ithresh] += ns
+        contab_raw[ithresh]   += ctab_r_delta
+        contab_gamma[ithresh] += ctab_g_delta
+        contab_raw_top10[ithresh]      += strat_contab['top10'][0]
+        contab_gamma_top10[ithresh]    += strat_contab['top10'][1]
+        contab_raw_bottom90[ithresh]   += strat_contab['bottom90'][0]
+        contab_gamma_bottom90[ithresh] += strat_contab['bottom90'][1]
 
-        bs_c, ns_c = compute_BS_climo(ny, nx, climo_2d,
-            MRMS_precip, MRMS_quality, thresh, climo_valid)
-        BS_climo[ithresh]    += bs_c
-        nsamps_climo[ithresh] += ns_c
+        date_contab_raw[ithresh]            = ctab_r_delta
+        date_contab_gamma[ithresh]          = ctab_g_delta
+        date_contab_raw_top10[ithresh]      = strat_contab['top10'][0]
+        date_contab_gamma_top10[ithresh]    = strat_contab['top10'][1]
+        date_contab_raw_bottom90[ithresh]   = strat_contab['bottom90'][0]
+        date_contab_gamma_bottom90[ithresh] = strat_contab['bottom90'][1]
 
-        # ---- West-of-105W subset (for BSS only, not reliability diagrams)
-        west_climo_mask = np.logical_and(climo_valid, west_mask)
+        for name, (bs_raw_arr, bs_gamma_arr, bs_climo_arr,
+                   ns_raw_arr, ns_gamma_arr, ns_climo_arr) in region_accum.items():
+            bs_raw, bs_gamma, bs_climo, ns = region_stats[name]
+            bs_raw_arr[ithresh]    += bs_raw
+            bs_gamma_arr[ithresh]  += bs_gamma
+            bs_climo_arr[ithresh]  += bs_climo
+            ns_raw_arr[ithresh]    += ns
+            ns_gamma_arr[ithresh]  += ns
+            ns_climo_arr[ithresh]  += ns
 
-        bs_rw, ns_rw = compute_BS_only(probs[thresh]['raw'],
-            MRMS_precip, MRMS_quality, thresh, west_climo_mask)
-        BS_raw_west[ithresh]    += bs_rw
-        nsamps_raw_west[ithresh] += ns_rw
+            date_region_stats[name][0][ithresh] = bs_raw
+            date_region_stats[name][1][ithresh] = bs_gamma
+            date_region_stats[name][2][ithresh] = bs_climo
+            date_region_stats[name][3][ithresh] = ns
 
-        bs_gw, ns_gw = compute_BS_only(probs[thresh]['gamma'],
-            MRMS_precip, MRMS_quality, thresh, west_climo_mask)
-        BS_gamma_west[ithresh]    += bs_gw
-        nsamps_gamma_west[ithresh] += ns_gw
+    cache_dict = {
+        'pthresholds': pthresholds,
+        'ncats': ncats,
+        'contab_raw_delta':            date_contab_raw,
+        'contab_gamma_delta':          date_contab_gamma,
+        'contab_raw_top10_delta':      date_contab_raw_top10,
+        'contab_gamma_top10_delta':    date_contab_gamma_top10,
+        'contab_raw_bottom90_delta':   date_contab_raw_bottom90,
+        'contab_gamma_bottom90_delta': date_contab_gamma_bottom90,
+        'region_stats': {name: tuple(arrs) for name, arrs in date_region_stats.items()},
+    }
+    with open(cache_file, 'wb') as f_cache:
+        cPickle.dump(cache_dict, f_cache)
 
-        bs_cw, ns_cw = compute_BS_climo(ny, nx, climo_2d,
-            MRMS_precip, MRMS_quality, thresh, west_climo_mask)
-        BS_climo_west[ithresh]    += bs_cw
-        nsamps_climo_west[ithresh] += ns_cw
+_nc.close()
 
 # ---- Check that we have usable data
 
@@ -557,6 +717,12 @@ BS_climo_arr     = np.full(nthresholds, np.nan)
 BSS_raw_west_arr   = np.full(nthresholds, np.nan)
 BSS_gamma_west_arr = np.full(nthresholds, np.nan)
 BS_climo_west_arr  = np.full(nthresholds, np.nan)
+BSS_raw_top10_arr   = np.full(nthresholds, np.nan)
+BSS_gamma_top10_arr = np.full(nthresholds, np.nan)
+BS_climo_top10_arr  = np.full(nthresholds, np.nan)
+BSS_raw_bottom90_arr   = np.full(nthresholds, np.nan)
+BSS_gamma_bottom90_arr = np.full(nthresholds, np.nan)
+BS_climo_bottom90_arr  = np.full(nthresholds, np.nan)
 
 # ---- Compute reliability, frequency of usage, and Brier score per threshold
 
@@ -589,10 +755,28 @@ for ithresh, thresh in enumerate(pthresholds):
     BSS_gamma_west = 1.0 - (BS_gamma_west[ithresh] / nsamps_gamma_west[ithresh]) / BS_climo_west_mean \
         if BS_climo_west_mean > 0 else np.nan
 
+    BS_climo_top10_mean = BS_climo_top10[ithresh] / float(nsamps_climo_top10[ithresh]) \
+        if nsamps_climo_top10[ithresh] > 0 else np.nan
+    BSS_raw_top10   = 1.0 - (BS_raw_top10[ithresh]   / nsamps_raw_top10[ithresh])   / BS_climo_top10_mean \
+        if BS_climo_top10_mean > 0 else np.nan
+    BSS_gamma_top10 = 1.0 - (BS_gamma_top10[ithresh] / nsamps_gamma_top10[ithresh]) / BS_climo_top10_mean \
+        if BS_climo_top10_mean > 0 else np.nan
+
+    BS_climo_bottom90_mean = BS_climo_bottom90[ithresh] / float(nsamps_climo_bottom90[ithresh]) \
+        if nsamps_climo_bottom90[ithresh] > 0 else np.nan
+    BSS_raw_bottom90   = 1.0 - (BS_raw_bottom90[ithresh]   / nsamps_raw_bottom90[ithresh])   / BS_climo_bottom90_mean \
+        if BS_climo_bottom90_mean > 0 else np.nan
+    BSS_gamma_bottom90 = 1.0 - (BS_gamma_bottom90[ithresh] / nsamps_gamma_bottom90[ithresh]) / BS_climo_bottom90_mean \
+        if BS_climo_bottom90_mean > 0 else np.nan
+
     print(f"  thresh={thresh}mm | CONUS:  BSS_raw={BSS_raw:.2f}  BSS_gamma={BSS_gamma:.2f}  "
           f"BS_climo={BS_climo_mean:.5f}")
     print(f"  thresh={thresh}mm | West:   BSS_raw={BSS_raw_west:.2f}  BSS_gamma={BSS_gamma_west:.2f}  "
           f"BS_climo={BS_climo_west_mean:.5f}")
+    print(f"  thresh={thresh}mm | Top10:  BSS_raw={BSS_raw_top10:.2f}  BSS_gamma={BSS_gamma_top10:.2f}  "
+          f"BS_climo={BS_climo_top10_mean:.5f}")
+    print(f"  thresh={thresh}mm | Bot90:  BSS_raw={BSS_raw_bottom90:.2f}  BSS_gamma={BSS_gamma_bottom90:.2f}  "
+          f"BS_climo={BS_climo_bottom90_mean:.5f}")
 
     relia_raw_arr[ithresh]    = relia_raw
     relia_gamma_arr[ithresh]  = relia_gamma
@@ -606,6 +790,12 @@ for ithresh, thresh in enumerate(pthresholds):
     BSS_raw_west_arr[ithresh]   = BSS_raw_west
     BSS_gamma_west_arr[ithresh] = BSS_gamma_west
     BS_climo_west_arr[ithresh]  = BS_climo_west_mean
+    BSS_raw_top10_arr[ithresh]   = BSS_raw_top10
+    BSS_gamma_top10_arr[ithresh] = BSS_gamma_top10
+    BS_climo_top10_arr[ithresh]  = BS_climo_top10_mean
+    BSS_raw_bottom90_arr[ithresh]   = BSS_raw_bottom90
+    BSS_gamma_bottom90_arr[ithresh] = BSS_gamma_bottom90
+    BS_climo_bottom90_arr[ithresh]  = BS_climo_bottom90_mean
 
     cthresh = r'P(obs $\geq$ '+str(thresh) + ' mm)'
     ctthresh = str(thresh)+'mm'
@@ -666,7 +856,7 @@ for ithresh, thresh in enumerate(pthresholds):
                 log=True,color=color,edgecolor='None',align='center')
 
     a1.legend(loc=4, fontsize='small')
-    plot_title = 'Relia_GRAF_ResUNet_Mixture_MRMS_' + \
+    plot_title = f'Relia_GRAF_{out_model_name}_MRMS_' + \
         cyyyymmddhh_list[0] + '_to_' + cyyyymmddhh_list[-1] + '_' + \
         ctthresh + '_' + clead + 'h.png'
     print ('  Saving plot to file = ',plot_title)
@@ -690,14 +880,24 @@ out_dict = {
     'BSS_raw_west':   BSS_raw_west_arr,
     'BSS_gamma_west': BSS_gamma_west_arr,
     'BS_climo_west':  BS_climo_west_arr,
+    'BSS_raw_top10':      BSS_raw_top10_arr,
+    'BSS_gamma_top10':    BSS_gamma_top10_arr,
+    'BS_climo_top10':     BS_climo_top10_arr,
+    'BSS_raw_bottom90':   BSS_raw_bottom90_arr,
+    'BSS_gamma_bottom90': BSS_gamma_bottom90_arr,
+    'BS_climo_bottom90':  BS_climo_bottom90_arr,
     'contab_raw':     contab_raw,
     'contab_gamma':   contab_gamma,
+    'contab_raw_top10':      contab_raw_top10,
+    'contab_gamma_top10':    contab_gamma_top10,
+    'contab_raw_bottom90':   contab_raw_bottom90,
+    'contab_gamma_bottom90': contab_gamma_bottom90,
     'nsamps_raw':     nsamps_raw,
     'nsamps_gamma':   nsamps_gamma,
     'nsamps_climo':   nsamps_climo,
 }
 relia_outfile = os.path.join(relia_dir,
-    f'relia_GRAF_ResUNet_Mixture_q0.5_{cyyyymmddhh_list[0]}_to_'
+    f'relia_GRAF_{out_model_name}_q0.5_{cyyyymmddhh_list[0]}_to_'
     f'{cyyyymmddhh_list[-1]}_lead{clead}h.cPick')
 with open(relia_outfile, 'wb') as f_out:
     cPickle.dump(out_dict, f_out)

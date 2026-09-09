@@ -1,27 +1,28 @@
 """
-make_plots_mlp_sensitivity.py  —  MLP sensitivity / serial-correlation figure
+make_plots_mlp_sensitivity.py  —  MLP serial-correlation figure
 
-Two-panel figure built from the actual training data for a chosen lead time.
+Single-panel figure built from the actual training data for a chosen lead time.
 
 For each sample the script computes:
-    x  = mean of E[Y_h] across 6 consecutive hourly inputs    (mm/h)
-    y  = std  of E[Y_h] across 6 consecutive hourly inputs    (mm/h)
-    where  E[Y_h] = (1 - p0_h) * [w_h * a1_h * t1_h + (1-w_h) * a2_h * t2_h]
+    x  = mean(x_h)   across 6 consecutive hourly inputs        (mm/h)
+    sigma(x) = std(x_h) across the same 6 hours                (mm/h)
+    where  x_h = E[X_h] = (1 - p0_h) * [w_h * a1_h * t1_h + (1-w_h) * a2_h * t2_h]
+    is the expected precipitation of hourly forecast h.  (Y is reserved
+    elsewhere in the manuscript for the MRMS target, hence x here.)
 
 Both axes use a square-root transform, which gives natural spacing for
 precipitation data without requiring an artificial offset for near-zero values.
 
-Panel (a):  binned-median 6-h MLP q0.9 as a function of (x, y).
-
-Panel (b):  binned-median ratio  q_MLP / q_naive  in the same (x, y) space,
-            where q_naive is the 90th percentile of the sum of 6 *independent*
-            draws from the hourly distributions (Monte Carlo).
-            Ratio > 1 indicates that positive serial correlation (persistence)
-            causes the MLP to assign a heavier tail than independence predicts.
+The figure shows the binned-median ratio  q_MLP / q_naive  as a function of
+(x, sigma(x)), where q_naive is the 90th percentile of the sum of 6
+*independent* draws from the hourly distributions (Monte Carlo).  Ratio > 1
+indicates that positive serial correlation (persistence) causes the MLP to
+assign a heavier tail than independence predicts.
 
 Contour iso-lines are drawn at explicit round-number physical levels and are
 computed from the same binned medians as the hexbin coloring, ensuring they
-are consistent with the colored background.
+are consistent with the colored background.  Bins are deliberately coarse
+(see HEXBIN_GRID / CONTOUR_BINS) to damp sample-count noise.
 
 Usage:
     python make_plots_mlp_sensitivity.py [clead]   (default: 24)
@@ -42,8 +43,7 @@ from scipy.stats import binned_statistic_2d
 from scipy.ndimage import gaussian_filter
 from scipy.interpolate import NearestNDInterpolator
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
-from matplotlib.colors import LogNorm, TwoSlopeNorm
+from matplotlib.colors import TwoSlopeNorm
 from matplotlib.ticker import FixedLocator, FixedFormatter
 import warnings
 warnings.filterwarnings('ignore')
@@ -62,8 +62,10 @@ MC_BATCH_SIZE  = 5000    # samples per MC batch
 MLP_FWD_BATCH  = 131072  # MLP forward-pass batch size
 MIN_MEAN_EY    = 0.01    # drop samples with mean E[Y_h] < this (mm/h)
 MIN_Q_NAIVE    = 0.05    # min naive q for ratio to be included
-HEXBIN_GRID    = 55      # hexbin gridsize
-CONTOUR_BINS   = 45      # rectangular bins for contour computation
+HEXBIN_GRID    = 28      # hexbin gridsize (coarse, to damp sampling noise)
+HEXBIN_MINCNT  = 8       # min samples per hexbin for it to be drawn
+CONTOUR_BINS   = 22      # rectangular bins for contour computation
+CONTOUR_MINCNT = 15      # min samples per contour bin for it to be used
 CONTOUR_SIGMA  = 0.8     # light Gaussian smoothing sigma for contours
 
 # Font sizes: current values scaled ×1.2; contour labels ×1.5
@@ -182,7 +184,7 @@ def load_data(clead):
 # =========================================================================
 
 def hourly_expected_value(features):
-    """Return (N, 6) array of E[Y_h] for each of the 6 input lead-time hours."""
+    """Return (N, 6) array of E[X_h] for each of the 6 input lead-time hours."""
     fz  = features[:, 0:6]
     mw  = features[:, 6:12]
     s1  = features[:, 12:18];  sc1 = features[:, 18:24]
@@ -324,22 +326,23 @@ def _set_sqrt_ticks(ax, xlim, ylim):
 # =========================================================================
 # Consistent contour overlay
 #
-# Bins (tx, ty) → median(z_phys) on a rectangular grid using the same
-# statistic as the hexbin (median), fills empty bins with nearest-neighbour
-# interpolation to avoid edge artifacts from Gaussian smoothing, then draws
-# contours at the specified physical levels.  Because both the hexbin and
-# the contour use median z in their respective bins, the iso-lines are
-# consistent with the background colour field.
+# Bins (tx, ty) → statistic(z_phys) on a rectangular grid using the same
+# statistic as the calling panel's hexbin, fills empty bins with
+# nearest-neighbour interpolation to avoid edge artifacts from Gaussian
+# smoothing, then draws contours at the specified physical levels.  Because
+# the hexbin and the contour use the same per-bin statistic, the iso-lines
+# are consistent with the background colour field.
 # =========================================================================
 
 def _add_contours(ax, tx, ty, z_phys, xlim, ylim, levels, colors,
-                  n_bins=CONTOUR_BINS, sigma=CONTOUR_SIGMA, fmt='%.3g'):
+                  n_bins=CONTOUR_BINS, sigma=CONTOUR_SIGMA, fmt='%.3g',
+                  statistic='median'):
     stat, xedge, yedge, _ = binned_statistic_2d(
-        tx, ty, z_phys, statistic='median', bins=n_bins, range=[xlim, ylim])
+        tx, ty, z_phys, statistic=statistic, bins=n_bins, range=[xlim, ylim])
     cnt,  *_ = binned_statistic_2d(
         tx, ty, z_phys, statistic='count',  bins=n_bins, range=[xlim, ylim])
 
-    bad = (cnt < 5) | ~np.isfinite(stat)
+    bad = (cnt < CONTOUR_MINCNT) | ~np.isfinite(stat)
 
     # Fill NaN bins via nearest-neighbour before smoothing to prevent
     # the constant-fill artifact that shifts contours away from the data.
@@ -385,130 +388,58 @@ def make_figure(x, y, q_mlp, q_naive, clead):
     sx = np.sqrt(x)
     sy = np.sqrt(y)
 
-    # --- Panel (a) data: physical q_mlp values for hexbin and contour ---
-    ok_a  = np.isfinite(sx) & np.isfinite(sy) & (q_mlp > 0)
-    q_a   = np.maximum(q_mlp[ok_a], 0.02)   # floor to keep LogNorm happy
-
-    # --- Panel (b) data: physical ratio values ---
+    ok    = np.isfinite(sx) & np.isfinite(sy) & (q_mlp > 0)
     ratio = np.where(q_naive > MIN_Q_NAIVE,
                      q_mlp / (q_naive + eps_q), np.nan)
-    ok_b  = ok_a & np.isfinite(ratio) & (ratio > 0)
+    ok    = ok & np.isfinite(ratio) & (ratio > 0)
 
-    # --- Shared axis limits in sqrt space ---
-    xlim = (np.sqrt(np.percentile(x[ok_a],  0.5)),
-            np.sqrt(np.percentile(x[ok_a], 99.5)))
-    ylim = (np.sqrt(np.percentile(y[ok_a],  0.5)),
-            np.sqrt(np.percentile(y[ok_a], 99.5)))
+    xlim = (np.sqrt(np.percentile(x[ok],  0.5)),
+            np.sqrt(np.percentile(x[ok], 99.5)))
+    ylim = (np.sqrt(np.percentile(y[ok],  0.5)),
+            np.sqrt(np.percentile(y[ok], 99.5)))
     ext  = [xlim[0], xlim[1], ylim[0], ylim[1]]
 
     qlabel = f'q{int(QUANTILE * 100)}'
 
-    # --- Manual axes layout: two panels + colorbars ---
-    # Shrinking AX_W by ~0.02 from what tight_layout would give ensures the
-    # colorbar tick labels are clear of the adjacent panel's y-axis label.
-    LM     = 0.085   # left margin
-    BM     = 0.12    # bottom margin
-    TM     = 0.91    # top of axes (suptitle sits above)
-    CB_W   = 0.018   # colorbar width
-    CB_PAD = 0.012   # gap between axes right edge and colorbar left edge
-    GAP    = 0.075   # horizontal gap between the two (axes + colorbar) pairs
-    AX_H   = TM - BM
-
-    PAIR_W = (1.0 - LM - 0.015 - GAP) / 2.0
-    AX_W   = PAIR_W - CB_W - CB_PAD - 0.06
-    AX_H   = AX_H - 0.04
-
-    ax1_x  = LM
-    cb1_x  = LM + AX_W + CB_PAD
-    ax2_x  = LM + PAIR_W + GAP
-    cb2_x  = ax2_x + AX_W + CB_PAD
-
-    fig = plt.figure(figsize=(14, 6.2))
+    fig = plt.figure(figsize=(7.5, 6.2))
+    ax  = fig.add_axes([0.11, 0.12, 0.72, 0.78])
+    cax = fig.add_axes([0.86, 0.12, 0.03, 0.78])
     fig.suptitle(
-        f'6-h MLP sensitivity to hourly expected-precipitation characteristics'
-        f' — lead {clead} h',
-        fontsize=F_SUPTITLE, y=0.98)
+        f'6-h MLP vs. naive-independence {qlabel}  — lead {clead} h',
+        fontsize=F_SUPTITLE, y=0.97)
 
-    ax   = fig.add_axes([ax1_x, BM, AX_W, AX_H])
-    cax  = fig.add_axes([cb1_x, BM, CB_W, AX_H])
-    ax2  = fig.add_axes([ax2_x, BM, AX_W, AX_H])
-    cax2 = fig.add_axes([cb2_x, BM, CB_W, AX_H])
-
-    # ------------------------------------------------------------------ #
-    # Panel (a): binned-median MLP q0.9                                    #
-    # ------------------------------------------------------------------ #
-
-    # Color scale: log-spaced across the q range
-    vlo_a = max(np.percentile(q_a, 1),  0.02)
-    vhi_a = min(np.percentile(q_a, 99), 200.0)
-
-    hb = ax.hexbin(
-        sx[ok_a], sy[ok_a], C=q_a,
-        reduce_C_function=np.median,
-        gridsize=HEXBIN_GRID, extent=ext, mincnt=1,
-        cmap='viridis', linewidths=0.15,
-        norm=LogNorm(vmin=vlo_a, vmax=vhi_a),
-    )
-
-    cb = fig.colorbar(hb, cax=cax)
-    q_ticks = [t for t in [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 25, 50]
-               if vlo_a * 0.9 <= t <= vhi_a * 1.1]
-    cb.set_ticks(q_ticks)
-    cb.set_ticklabels([f'{t:g}' for t in q_ticks], fontsize=F_CB_TICK)
-    cb.set_label(f'Median 6-h MLP {qlabel}  (mm)', fontsize=F_CB_LABEL)
-
-    # Contour at round mm levels using the same physical z values as hexbin
-    contour_levels_a = [lv for lv in [0.1, 0.25, 0.5, 1, 2, 5, 10, 20]
-                        if vlo_a <= lv <= vhi_a]
-    _add_contours(ax, sx[ok_a], sy[ok_a], q_a,
-                  xlim, ylim, contour_levels_a, colors='white', fmt='%g')
-
-    ax.set_xlabel('Mean hourly  E[Y]  (mm/h)', fontsize=F_LABEL)
-    ax.set_ylabel('Std of hourly  E[Y]  (mm/h)', fontsize=F_LABEL)
-    ax.set_title(f'(a)  Median 6-h MLP {qlabel}  (mm)', fontsize=F_TITLE)
-    ax.set_xlim(xlim)
-    ax.set_ylim(ylim)
-    _set_sqrt_ticks(ax, xlim, ylim)
-
-
-    # ------------------------------------------------------------------ #
-    # Panel (b): ratio  MLP q0.9 / naive-independence q0.9               #
-    # ------------------------------------------------------------------ #
-
-    r_vals = ratio[ok_b]
+    r_vals = ratio[ok]
     vmin_r = max(np.nanpercentile(r_vals,  2), 0.15)
     vmax_r = min(np.nanpercentile(r_vals, 98), 5.0)
     vmin_r = min(vmin_r, 0.85)   # keep centre at 1.0 in range
     vmax_r = max(vmax_r, 1.15)
 
-    hb2 = ax2.hexbin(
-        sx[ok_b], sy[ok_b], C=r_vals,
+    hb = ax.hexbin(
+        sx[ok], sy[ok], C=r_vals,
         reduce_C_function=np.median,
-        gridsize=HEXBIN_GRID, extent=ext, mincnt=1,
+        gridsize=HEXBIN_GRID, extent=ext, mincnt=HEXBIN_MINCNT,
         cmap='RdBu_r', linewidths=0.15,
         norm=TwoSlopeNorm(vmin=vmin_r, vcenter=1.0, vmax=vmax_r),
     )
 
-    cb2 = fig.colorbar(hb2, cax=cax2)
+    cb = fig.colorbar(hb, cax=cax)
     r_ticks = [t for t in [0.25, 0.5, 0.67, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0]
                if vmin_r * 0.9 <= t <= vmax_r * 1.1]
-    cb2.set_ticks(r_ticks)
-    cb2.set_ticklabels([f'{t:g}' for t in r_ticks], fontsize=F_CB_TICK)
-    cb2.set_label(f'MLP {qlabel} / naive-independence {qlabel}', fontsize=F_CB_LABEL)
+    cb.set_ticks(r_ticks)
+    cb.set_ticklabels([f'{t:g}' for t in r_ticks], fontsize=F_CB_TICK)
+    cb.set_label(f'MLP {qlabel} / naive-independence {qlabel}', fontsize=F_CB_LABEL)
 
     # Contour at physically meaningful ratio levels
-    contour_levels_b = [lv for lv in [0.5, 0.67, 0.75, 1.0, 1.25, 1.5, 2.0]
-                        if vmin_r <= lv <= vmax_r]
-    _add_contours(ax2, sx[ok_b], sy[ok_b], r_vals,
-                  xlim, ylim, contour_levels_b, colors='black', fmt='%g')
+    contour_levels = [lv for lv in [0.5, 0.67, 0.75, 1.0, 1.25, 1.5, 2.0]
+                      if vmin_r <= lv <= vmax_r]
+    _add_contours(ax, sx[ok], sy[ok], r_vals,
+                  xlim, ylim, contour_levels, colors='black', fmt='%g')
 
-    ax2.set_xlabel('Mean hourly  E[Y]  (mm/h)', fontsize=F_LABEL)
-    ax2.set_ylabel('Std of hourly  E[Y]  (mm/h)', fontsize=F_LABEL)
-    ax2.set_title(f'(b)  Ratio: MLP {qlabel} / naive-independence {qlabel}',
-                  fontsize=F_TITLE)
-    ax2.set_xlim(xlim)
-    ax2.set_ylim(ylim)
-    _set_sqrt_ticks(ax2, xlim, ylim)
+    ax.set_xlabel('Mean hourly  E[X]  (mm/h)', fontsize=F_LABEL)
+    ax.set_ylabel(r'$\sigma(x)$  (mm/h)', fontsize=F_LABEL)
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+    _set_sqrt_ticks(ax, xlim, ylim)
 
     # ------------------------------------------------------------------ #
     os.makedirs(OUTPUT_DIR, exist_ok=True)

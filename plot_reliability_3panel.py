@@ -72,11 +72,12 @@ except Exception:
 
 # ---------------------------------------------------------------
 
-# Each panel 5"×5" square, with space for ylabel on left and suptitle on top
-pan_size = 5.0
-fig, axes = plt.subplots(1, 3, figsize=(pan_size * 3 + 1.0, pan_size))
+# Each panel square, with space for ylabel on left and suptitle on top
+pan_size = 6.5
+fig, axes = plt.subplots(1, 3, figsize=(pan_size * 3 + 1.0, pan_size + 1.0),
+    gridspec_kw={'wspace': 0.3})
 fig.suptitle(f'{clead}-h forecast reliability',
-             fontsize=18)
+             fontsize=28.08, y=0.98)
 
 for col, (ithresh, thresh) in enumerate(zip(thresh_idx, PLOT_THRESHOLDS)):
     ax = axes[col]
@@ -86,18 +87,18 @@ for col, (ithresh, thresh) in enumerate(zip(thresh_idx, PLOT_THRESHOLDS)):
     cbss_r = f'{bss_r:.2f}' if not np.isnan(bss_r) else 'N/A'
     cbss_g = f'{bss_g:.2f}' if not np.isnan(bss_g) else 'N/A'
 
-    label_raw   = f'Smoothed GRAF raw,  BSS = {cbss_r}'
-    label_gamma = f'Attention ResUNet,  BSS = {cbss_g}'
+    label_raw   = f'Smoothed GRAF raw\nBSS = {cbss_r}'
+    label_gamma = f'Attention ResUNet\nBSS = {cbss_g}'
 
     ax.plot([0, 100], [0, 100], '--', color='k', lw=1)
     ax.set_xlim(-1, 101)
     ax.set_ylim(-1, 101)
     ax.set_aspect('equal')
-    ax.set_xlabel('Forecast probability (%)', fontsize=14)
-    ax.set_ylabel('Observed relative frequency (%)', fontsize=14)
-    ax.tick_params(labelsize=13)
+    ax.set_xlabel('Forecast probability (%)', fontsize=21.84)
+    ax.set_ylabel('Observed relative frequency (%)', fontsize=21.84)
+    ax.tick_params(labelsize=15.6)
     panel_letter = 'abc'[col]
-    ax.set_title(f'({panel_letter}) ' + r'P(obs $\geq$ ' + str(thresh) + ' mm)', fontsize=17)
+    ax.set_title(f'({panel_letter}) ' + r'P(obs $\geq$ ' + str(thresh) + ' mm)', fontsize=24.48)
 
     for imodel, (relia, frequse, color, label) in enumerate([
             (relia_raw[ithresh],   frequse_raw[ithresh],   'Red',       label_raw),
@@ -105,7 +106,7 @@ for col, (ithresh, thresh) in enumerate(zip(thresh_idx, PLOT_THRESHOLDS)):
     ]):
         relia_ma = ma.masked_where(relia < -99., relia)
         ax.plot(probability, 100. * relia_ma, 'o-',
-                color=color, linewidth=2, label=label)
+                color=color, linewidth=3, markersize=9, label=label)
 
         # Frequency-of-use inset: upper-left, no y-label to avoid overlap with main axis
         if imodel == 0:
@@ -114,18 +115,18 @@ for col, (ithresh, thresh) in enumerate(zip(thresh_idx, PLOT_THRESHOLDS)):
                    log=True, color=color, edgecolor='None', align='center')
             a2.set_xlim(-5, 105)
             a2.set_ylim(1e-5, 1.)
-            a2.set_title('Frequency of usage', fontsize=9)
-            a2.set_xlabel('Forecast probability', fontsize=8)
-            a2.tick_params(labelsize=7)
+            a2.set_title('Frequency of usage', fontsize=10.8)
+            a2.set_xlabel('Forecast probability', fontsize=12.48)
+            a2.tick_params(labelsize=8.4)
             a2.hlines([1e-4, 1e-3, 1e-2, 0.1], 0, 100,
                       linestyles='dashed', colors='gray', lw=0.5)
         else:
             a2.bar(probability, frequse, width=1.5, bottom=1e-5,
                    log=True, color=color, edgecolor='None', align='center')
 
-    ax.legend(loc='lower right', fontsize=9)
+    ax.legend(loc='lower right', fontsize=14.04)
 
-plt.tight_layout()
+plt.subplots_adjust(top=0.90, bottom=0.1, left=0.06, right=0.98, wspace=0.3)
 
 outfile = os.path.join(RELIA_DIR,
     f'Relia_3panel_{date0}_to_{date1}_lead{clead}h.png')

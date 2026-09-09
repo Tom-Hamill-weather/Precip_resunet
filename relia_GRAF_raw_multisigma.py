@@ -349,8 +349,7 @@ for ithresh, thresh in enumerate(pthresholds):
 
     ctthresh = str(thresh)
     ctitle = r''+cleadb+'-'+clead+' h '+cmtit+' reliability, '+\
-        r'precip $\geq$ '+ctthresh+r' mm,'+'\n'+\
-        cyyyymmddhh_begin+' to '+cyyyymmddhh_end
+        r'precip $\geq$ '+ctthresh+r' mm'
 
     print ('making plots for threshold = ', thresh)
     probability = np.arange(11) * 100. / np.real(10.)
@@ -401,7 +400,7 @@ for ithresh, thresh in enumerate(pthresholds):
             log=True, color=color, edgecolor='None',
             align='center')
 
-    a1.legend(loc=4, fontsize='xx-small')
+    a1.legend(loc=4, fontsize=7.25)
     plot_title = 'relia_GRAF_'+cyyyymmddhh_begin+'_to_'+\
         cyyyymmddhh_end+'_'+ctthresh+'mm_'+clead+'h.png'
 

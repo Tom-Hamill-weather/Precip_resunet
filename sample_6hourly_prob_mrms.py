@@ -77,6 +77,8 @@ SAT_MM = 20.0   # expected_6h (mm) at which amt_score = 0.5
 
 TERRAIN_MASK_NC = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                'terrain_roughness_mask_graf.nc')
+TERRAIN_INFO_NC = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'GRAF_CONUS_terrain_info.nc')
 
 
 def load_local_std():
@@ -84,6 +86,22 @@ def load_local_std():
     std of elevation), same grid as GRAF/MRMS. See terrain_roughness_graf.py."""
     with Dataset(TERRAIN_MASK_NC, 'r') as ds:
         return np.asarray(ds.variables['local_std'][:], dtype=np.float32)
+
+
+def load_terrain_fields():
+    """Static (ny, nx) terrain elevation-deviation and smoothed-gradient
+    fields, same grid as GRAF/MRMS. See GRAF_terrain_height.py. Returns a
+    dict with keys 'terrain_height_local_difference', 'dterrain_dlon_smoothed',
+    'dterrain_dlat_smoothed'."""
+    with Dataset(TERRAIN_INFO_NC, 'r') as ds:
+        return {
+            'terrain_height_local_difference':
+                np.asarray(ds.variables['terrain_height_local_difference'][:], dtype=np.float32),
+            'dterrain_dlon_smoothed':
+                np.asarray(ds.variables['dterrain_dlon_smoothed'][:], dtype=np.float32),
+            'dterrain_dlat_smoothed':
+                np.asarray(ds.variables['dterrain_dlat_smoothed'][:], dtype=np.float32),
+        }
 
 
 def julian_features(cyyyymmddhh):
@@ -98,13 +116,14 @@ def julian_features(cyyyymmddhh):
 # =========================================================================
 
 def detect_paths():
-    """Return (probs_dir, mrms_dir, output_dir) for current host."""
+    """Return (probs_dir, mrms_dir, output_dir, texture_dir) for current host."""
     for base in ['/data/resnet_data', '/data2/resnet_data']:
         if os.path.isdir(base):
             return (
                 os.path.join(base, 'probs'),
                 os.path.join(base, 'MRMS'),
                 os.path.join(base, 'prob_samples'),
+                os.path.join(base, 'graf_texture'),
             )
     raise RuntimeError("Cannot locate resnet_data directory. "
                        "Expected /data/resnet_data or /data2/resnet_data.")
@@ -145,6 +164,37 @@ def read_prob_file(probs_dir, yyyymmddhh, lead_time):
         }
     except Exception as exc:
         print(f'  WARNING: could not read prob file {fname}: {exc}')
+        return None
+
+
+def read_texture_file(texture_dir, yyyymmddhh, clead):
+    """
+    Read one GRAF-texture-features netCDF file (see
+    save_graf_texture_features.py). Unlike read_prob_file, one file already
+    covers the whole 6-hour window (nlead_times/npairs axes), so no
+    per-hour stacking is needed here.
+
+    Returns dict of numpy arrays -- 'wet_area_fraction'/'peak_to_mean_ratio'/
+    'coeff_variation' shape (6,ny,nx); 'wetdry_jaccard'/'zscore_pattern_corr'
+    shape (5,ny,nx); 'precip_6h_total' shape (ny,nx) -- or None if the file
+    is missing/unreadable.
+    """
+    fname = os.path.join(texture_dir, f'{yyyymmddhh}_{clead}_graf_texture_features.nc')
+    if not os.path.exists(fname):
+        print(f'  WARNING: texture file not found: {fname}')
+        return None
+    try:
+        with Dataset(fname, 'r') as ds:
+            return {
+                'wet_area_fraction':  ds['wet_area_fraction'][:].data.astype(np.float32),
+                'peak_to_mean_ratio': ds['peak_to_mean_ratio'][:].data.astype(np.float32),
+                'coeff_variation':    ds['coeff_variation'][:].data.astype(np.float32),
+                'wetdry_jaccard':       ds['wetdry_jaccard'][:].data.astype(np.float32),
+                'zscore_pattern_corr':  ds['zscore_pattern_corr'][:].data.astype(np.float32),
+                'precip_6h_total':      ds['precip_6h_total'][:].data.astype(np.float32),
+            }
+    except Exception as exc:
+        print(f'  WARNING: could not read texture file {fname}: {exc}')
         return None
 
 
@@ -209,15 +259,28 @@ def write_monthly_netcdf(output_dir, month_key, clead, data):
     sample_sin_doy = np.concatenate(data['sample_sin_doy'],    axis=0)
     sample_local_std = np.concatenate(data['sample_local_std'], axis=0)
 
+    sample_wet_area_fraction  = np.concatenate(data['sample_wet_area_fraction'],  axis=0)  # (N, 6)
+    sample_peak_to_mean_ratio = np.concatenate(data['sample_peak_to_mean_ratio'], axis=0)
+    sample_coeff_variation    = np.concatenate(data['sample_coeff_variation'],    axis=0)
+    sample_wetdry_jaccard      = np.concatenate(data['sample_wetdry_jaccard'],      axis=0)  # (N, 5)
+    sample_zscore_pattern_corr = np.concatenate(data['sample_zscore_pattern_corr'], axis=0)
+    sample_graf_precip_6h = np.concatenate(data['sample_graf_precip_6h'], axis=0)  # (N,)
+    sample_terrain_height_local_difference = \
+        np.concatenate(data['sample_terrain_height_local_difference'], axis=0)
+    sample_dterrain_dlon_smoothed = np.concatenate(data['sample_dterrain_dlon_smoothed'], axis=0)
+    sample_dterrain_dlat_smoothed = np.concatenate(data['sample_dterrain_dlat_smoothed'], axis=0)
+
     nsamples, nlead_times = frac_zero.shape
+    npairs = sample_wetdry_jaccard.shape[1]
 
     print(f'Writing {nsamples} samples to {fname}')
     with Dataset(fname, 'w', format='NETCDF4') as nc:
         nc.createDimension('nsamples',    nsamples)
         nc.createDimension('nlead_times', nlead_times)
+        nc.createDimension('npairs',      npairs)
 
-        def _write2d(name, arr, units, long_name):
-            v = nc.createVariable(name, 'f4', ('nsamples', 'nlead_times'),
+        def _write2d(name, arr, units, long_name, dimname='nlead_times'):
+            v = nc.createVariable(name, 'f4', ('nsamples', dimname),
                                   zlib=True, complevel=4)
             v.units = units
             v.long_name = long_name
@@ -268,6 +331,28 @@ def write_monthly_netcdf(output_dir, month_key, clead, data):
                  'm', 'Local terrain-roughness (60-km-smoothed local std of '
                       'elevation) at the sampled grid point')
 
+        _write2d('sample_wet_area_fraction', sample_wet_area_fraction,
+                 '1', '7x7-window fraction of GRAF precip > 0.1mm, per lead time')
+        _write2d('sample_peak_to_mean_ratio', sample_peak_to_mean_ratio,
+                 '1', '7x7-window max/mean of GRAF precip, per lead time')
+        _write2d('sample_coeff_variation', sample_coeff_variation,
+                 '1', '7x7-window std/mean of GRAF precip, per lead time')
+        _write2d('sample_wetdry_jaccard', sample_wetdry_jaccard,
+                 '1', 'Wet/dry Jaccard overlap between consecutive hours, per pair',
+                 dimname='npairs')
+        _write2d('sample_zscore_pattern_corr', sample_zscore_pattern_corr,
+                 '1', 'Windowed correlation of z-scored patterns, consecutive hours, per pair',
+                 dimname='npairs')
+        _write1d('sample_graf_precip_6h', sample_graf_precip_6h,
+                 'mm', 'Raw GRAF 6-h precipitation total at the sampled grid point')
+        _write1d('sample_terrain_height_local_difference',
+                 sample_terrain_height_local_difference,
+                 'm', 'Terrain elevation minus 15-gp-smoothed elevation at the sampled grid point')
+        _write1d('sample_dterrain_dlon_smoothed', sample_dterrain_dlon_smoothed,
+                 'm', 'Smoothed terrain gradient, longitude direction, at the sampled grid point')
+        _write1d('sample_dterrain_dlat_smoothed', sample_dterrain_dlat_smoothed,
+                 'm', 'Smoothed terrain gradient, latitude direction, at the sampled grid point')
+
         # Global attributes
         nc.clead         = int(clead)
         nc.aconst        = float(aconst)
@@ -305,10 +390,11 @@ def main():
         raise ValueError(f'clead must be >= 5 to allow 6 consecutive lead times '
                          f'(got clead={clead})')
 
-    probs_dir, mrms_dir, output_dir = detect_paths()
-    print(f'Probs dir:  {probs_dir}')
-    print(f'MRMS dir:   {mrms_dir}')
-    print(f'Output dir: {output_dir}')
+    probs_dir, mrms_dir, output_dir, texture_dir = detect_paths()
+    print(f'Probs dir:   {probs_dir}')
+    print(f'MRMS dir:    {mrms_dir}')
+    print(f'Output dir:  {output_dir}')
+    print(f'Texture dir: {texture_dir}')
     print(f'Lead time:  {clead} h')
     print(f'Date range: {yyyymmddhh_start} to {yyyymmddhh_end} (6-h stride, all 4 cycles)')
     print(f'Parameters: aconst={aconst}, BETA={BETA}, SAT_MM={SAT_MM}, '
@@ -316,6 +402,7 @@ def main():
     print()
 
     local_std = load_local_std()
+    terrain_fields = load_terrain_fields()
 
     # Six lead times per init time: (clead-5) ... clead
     lead_offsets = list(range(-5, 1))   # [-5, -4, -3, -2, -1, 0]
@@ -366,6 +453,15 @@ def main():
         gscale2_6    = np.stack(prob_params['gamma_scale2'],   axis=0)
 
         ny, nx = frac_zero_6.shape[1], frac_zero_6.shape[2]
+
+        # ------------------------------------------------------------------
+        # 1b. Read GRAF texture/persistence features (one file covers the
+        #     whole 6-hour window; see save_graf_texture_features.py)
+        # ------------------------------------------------------------------
+        texture_data = read_texture_file(texture_dir, yyyymmddhh, clead)
+        if texture_data is None:
+            print(f'  Skipping {yyyymmddhh}: missing texture-feature file for clead={clead}')
+            continue
 
         # ------------------------------------------------------------------
         # 2. Read 6 MRMS verification files
@@ -479,6 +575,11 @@ def main():
             """arr6 shape (6, ny, nx) → (actual_n, 6)"""
             return arr6[:, chosen_i, chosen_j].T.astype(np.float32)
 
+        def _extract5(arr5):
+            """arr5 shape (5, ny, nx) → (actual_n, 5), pair axis ordered
+            (clead-5,clead-4)...(clead-1,clead)"""
+            return arr5[:, chosen_i, chosen_j].T.astype(np.float32)
+
         s_frac_zero  = _extract(frac_zero_6)
         s_mix_weight = _extract(mix_weight_6)
         s_gshape1    = _extract(gshape1_6)
@@ -486,11 +587,24 @@ def main():
         s_gshape2    = _extract(gshape2_6)
         s_gscale2    = _extract(gscale2_6)
 
+        s_wet_area_fraction  = _extract(texture_data['wet_area_fraction'])
+        s_peak_to_mean_ratio = _extract(texture_data['peak_to_mean_ratio'])
+        s_coeff_variation    = _extract(texture_data['coeff_variation'])
+        s_wetdry_jaccard      = _extract5(texture_data['wetdry_jaccard'])
+        s_zscore_pattern_corr = _extract5(texture_data['zscore_pattern_corr'])
+        s_graf_precip_6h = texture_data['precip_6h_total'][chosen_i, chosen_j].astype(np.float32)
+
         s_precip_6h    = precip_6h[chosen_i, chosen_j].astype(np.float32)
         s_mean_quality = mean_qual[chosen_i, chosen_j].astype(np.float32)
         s_lat          = lats_grid[chosen_i, chosen_j].astype(np.float32)
         s_lon          = lons_grid[chosen_i, chosen_j].astype(np.float32)
         s_local_std    = local_std[chosen_i, chosen_j].astype(np.float32)
+        s_terrain_height_local_difference = \
+            terrain_fields['terrain_height_local_difference'][chosen_i, chosen_j].astype(np.float32)
+        s_dterrain_dlon_smoothed = \
+            terrain_fields['dterrain_dlon_smoothed'][chosen_i, chosen_j].astype(np.float32)
+        s_dterrain_dlat_smoothed = \
+            terrain_fields['dterrain_dlat_smoothed'][chosen_i, chosen_j].astype(np.float32)
         s_date         = np.full(actual_n, int(yyyymmddhh), dtype=np.int32)
         cos_doy, sin_doy = julian_features(yyyymmddhh)
         s_cos_doy      = np.full(actual_n, cos_doy, dtype=np.float32)
@@ -519,6 +633,15 @@ def main():
                 'sample_cos_doy':   [],
                 'sample_sin_doy':   [],
                 'sample_local_std': [],
+                'sample_wet_area_fraction':  [],
+                'sample_peak_to_mean_ratio': [],
+                'sample_coeff_variation':    [],
+                'sample_wetdry_jaccard':       [],
+                'sample_zscore_pattern_corr':  [],
+                'sample_graf_precip_6h':       [],
+                'sample_terrain_height_local_difference': [],
+                'sample_dterrain_dlon_smoothed':           [],
+                'sample_dterrain_dlat_smoothed':           [],
             }
 
         d = monthly_data[month_key]
@@ -536,6 +659,15 @@ def main():
         d['sample_cos_doy'].append(s_cos_doy)
         d['sample_sin_doy'].append(s_sin_doy)
         d['sample_local_std'].append(s_local_std)
+        d['sample_wet_area_fraction'].append(s_wet_area_fraction)
+        d['sample_peak_to_mean_ratio'].append(s_peak_to_mean_ratio)
+        d['sample_coeff_variation'].append(s_coeff_variation)
+        d['sample_wetdry_jaccard'].append(s_wetdry_jaccard)
+        d['sample_zscore_pattern_corr'].append(s_zscore_pattern_corr)
+        d['sample_graf_precip_6h'].append(s_graf_precip_6h)
+        d['sample_terrain_height_local_difference'].append(s_terrain_height_local_difference)
+        d['sample_dterrain_dlon_smoothed'].append(s_dterrain_dlon_smoothed)
+        d['sample_dterrain_dlat_smoothed'].append(s_dterrain_dlat_smoothed)
 
     # ======================================================================
     # 9. Write one netCDF file per calendar month

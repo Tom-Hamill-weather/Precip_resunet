@@ -11,6 +11,7 @@ Example:
 
 import sys
 import os
+from datetime import datetime
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -253,19 +254,19 @@ if __name__ == '__main__':
     # ---------------------------------------------------------------------------
     # Build figure
     # ---------------------------------------------------------------------------
-    fig = plt.figure(figsize=(15, 6.5))
+    fig = plt.figure(figsize=(15, 7.8))
 
+    ic_str = datetime.strptime(cyyyymmddhh, '%Y%m%d%H').strftime('%H UTC %-d %b %Y')
     plt.suptitle(
-        f'Hourly GRAF precipitation forecast and Attention ResUNet Probabilities, '
-        f'{clead}-hour forecast for {cyyyymmddhh}',
-        fontsize=19, y=0.995
+        f'{clead}-hour forecast for {ic_str}',
+        fontsize=28.5, y=0.98
     )
 
     # -----------------------------------------------------------------------
     # Panel (a): GRAF precipitation map
     # -----------------------------------------------------------------------
-    ax1 = fig.add_axes([0.03, 0.14, 0.484, 0.737])
-    ax1.set_title('(a) GRAF forecast', fontsize=18)
+    ax1 = fig.add_axes([0.006, 0.1167, 0.532, 0.6756])
+    ax1.set_title('(a) GRAF forecast', fontsize=27)
 
     m = Basemap(rsphere=(6378137.00, 6356752.3142),
                 resolution='l', projection='lcc', area_thresh=1000.,
@@ -291,51 +292,52 @@ if __name__ == '__main__':
     xpt, ypt = m(target_lon, target_lat)
     ax1.plot(xpt, ypt, 'k+', markersize=12, markeredgewidth=2.0, zorder=10)
 
+    lon_dir = 'W' if actual_lon < 0 else 'E'
+    ax1.text(0.02, 0.02,
+             f'({actual_lat:.2f}°N, {abs(actual_lon):.2f}°{lon_dir})',
+             transform=ax1.transAxes, fontsize=16, va='bottom', ha='left',
+             zorder=11, bbox=dict(facecolor='white', edgecolor='none', alpha=0.75, pad=2))
+
     # Colorbar below map
-    cax1 = fig.add_axes([0.04, 0.085, 0.464, 0.025])
+    cax1 = fig.add_axes([0.016, 0.0708, 0.512, 0.0208])
     cb1 = plt.colorbar(CS1, orientation='horizontal', cax=cax1,
                        drawedges=True, ticks=clevs_precip, format='%g')
-    cb1.ax.tick_params(labelsize=11)
-    cb1.set_label('Precipitation (mm)', fontsize=14)
+    cb1.ax.tick_params(labelsize=17)
+    cb1.set_label('Precipitation (mm)', fontsize=21)
 
     # -----------------------------------------------------------------------
     # Panel (b): Gamma mixture PDF
     # -----------------------------------------------------------------------
-    ax2 = fig.add_axes([0.56, 0.30, 0.41, 0.58])
-    ax2.set_title('(b) Fitted probabilities', fontsize=18)
+    ax2 = fig.add_axes([0.56, 0.25, 0.41, 0.4833])
+    ax2.set_title('(b) Fitted probabilities', fontsize=27)
 
     ax2.fill_between(x, pdf_full, alpha=0.18, color='steelblue', zorder=1)
     ax2.plot(x, pdf_full, color='steelblue', linewidth=2.0, zorder=2,
              label='Mixture PDF')
     ax2.plot(x, pdf_comp1, color='#4daf4a', linewidth=1.5, linestyle='--',
              alpha=0.85, zorder=3,
-             label=f'Comp 1: α={a1:.2f}, θ={th1:.2f}, μ={mean1:.2f} mm')
+             label=f'Comp 1: α={a1:.2f}, θ={th1:.2f}, weight={w:.2f}')
     ax2.plot(x, pdf_comp2, color='#e41a1c', linewidth=1.5, linestyle='--',
              alpha=0.85, zorder=3,
-             label=f'Comp 2: α={a2:.2f}, θ={th2:.2f}, μ={mean2:.2f} mm')
+             label=f'Comp 2: α={a2:.2f}, θ={th2:.2f}, weight={1.0 - w:.2f}')
 
     y_tick_top = pdf_full.max() * 1.12
 
     ax2.set_xlim(left=0.0, right=x_max)
     ax2.set_ylim(bottom=0.0, top=y_tick_top * 1.05)
-    ax2.set_xlabel('Precipitation amount (mm)', fontsize=13)
-    ax2.set_ylabel('Probability density (mm⁻¹)', fontsize=13)
-    ax2.tick_params(axis='both', labelsize=10)
+    ax2.set_xlabel('Precipitation amount (mm)', fontsize=20)
+    ax2.set_ylabel('Probability density (mm⁻¹)', fontsize=20)
+    ax2.tick_params(axis='both', labelsize=15)
     ax2.grid(True, alpha=0.3, linestyle='--')
-
-    lon_dir = 'W' if actual_lon < 0 else 'E'
-    ax2.text(0.02, 0.98,
-             f'({actual_lat:.2f}°N, {abs(actual_lon):.2f}°{lon_dir})',
-             transform=ax2.transAxes, fontsize=8, va='top')
 
     patch = mpatches.Patch(facecolor='steelblue', edgecolor='navy',
                            label=f'P(X=0) = {p0:.3f}')
     leg_h, leg_l = ax2.get_legend_handles_labels()
     ax2.legend(handles=leg_h + [patch], labels=leg_l + [f'P(X=0) = {p0:.3f}'],
-               loc='upper right', fontsize=8, framealpha=0.85)
+               loc='upper right', fontsize=15.6, framealpha=0.85)
 
     # Probability bar below PDF axes
-    ax_pbar = fig.add_axes([0.56, 0.055, 0.41, 0.14])
+    ax_pbar = fig.add_axes([0.56, 0.0458, 0.41, 0.1167])
 
     ax_pbar.barh(0, 1.0 - p0, left=p0, height=0.55,
                  color='#aec7e8', edgecolor='navy', linewidth=1.5, align='center')
@@ -345,13 +347,13 @@ if __name__ == '__main__':
 
     if p0 > 0.06:
         ax_pbar.text(p0 / 2, 0, f'P(X=0) = {p0:.3f}',
-                     ha='center', va='center', fontsize=10, color='white')
+                     ha='center', va='center', fontsize=15, color='white')
     else:
         ax_pbar.text(p0 + 0.01, 0, f'P(X=0)={p0:.3f}',
-                     ha='left', va='center', fontsize=10, color='navy')
+                     ha='left', va='center', fontsize=15, color='navy')
     if (1.0 - p0) > 0.12:
         ax_pbar.text(p0 + (1.0 - p0) / 2, 0, f'P(wet) = {1.0 - p0:.3f}',
-                     ha='center', va='center', fontsize=10, color='navy')
+                     ha='center', va='center', fontsize=15, color='navy')
 
     ax_pbar.set_xlim(0.0, 1.0)
     ax_pbar.set_ylim(-0.5, 0.5)

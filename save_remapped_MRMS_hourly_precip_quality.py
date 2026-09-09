@@ -182,7 +182,9 @@ def save_precip_quality_to_netCDF(output_directory, \
 
 def detect_config():
     """Select the appropriate config file based on the runtime environment."""
-    if os.path.exists('/data2/resnet_data'):
+    if os.path.exists('/data/resnet_data'):
+        return 'config_aws.ini'
+    elif os.path.exists('/data2/resnet_data'):
         return 'config_aws.ini'
     elif os.path.exists('/storage2/library/archive/grid'):
         return 'config_hdo.ini'
@@ -226,7 +228,16 @@ for idate, date in enumerate(dates):
     cyyyymmdd = date[0:8]
     chh = date[8:10]
     print ('------------- ', idate, date)
-    
+
+    # ---- Skip if output already exists (resume support).
+
+    cyyyymm = date[0:6]
+    expected_outfile = os.path.join(output_dir, cyyyymm, \
+        'MRMS_1h_pamt_and_data_qual_' + date + '.nc')
+    if os.path.exists(expected_outfile):
+        print ('   already exists, skipping: ', expected_outfile)
+        continue
+
     # ---- Download the hourly MRMS precip, extract grib
 
     now = datetime.now()

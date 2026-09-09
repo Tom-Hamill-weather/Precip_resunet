@@ -294,8 +294,8 @@ def plot_3panel(lat_1, lat_2, lat_0, lon_0, lons, lats,
                             pan_w - 2 * cbar_inset, cbar_h])
         cb = plt.colorbar(CS, orientation='horizontal', cax=cax,
                           drawedges=True, ticks=cb_ticks, format='%g')
-        cb.ax.tick_params(labelsize=6)
-        cb.set_label(cbar_label, fontsize=9)
+        cb.ax.tick_params(labelsize=7.2)
+        cb.set_label(cbar_label, fontsize=11.7)
 
     # --- panel (a): GRAF hourly precipitation ---
     ax1 = fig.add_axes([pan_left[0], pan_bot, pan_w, pan_h])

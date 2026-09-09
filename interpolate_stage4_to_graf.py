@@ -83,7 +83,14 @@ for it in range(NT):
         ], axis=1)
         interp_fn = LinearNDInterpolator(tri, data_stack)
         result = interp_fn(graf_pts)           # (n_graf_pts, NH)
-        climo_on_graf[it, im, :, :, :] = result.reshape(NH, NY_G, NX_G)
+        # NOTE: reshape(NH, NY_G, NX_G) here does NOT transpose -- it silently
+        # scrambles the hour and spatial axes, entangling each grid point's
+        # stack of 24 true hours with an unrelated slice of neighboring
+        # points. Same bug found and fixed in HRRRcal's
+        # stage4_climo_to_hrrr3km.py / stage4_climo_to_graf.py (2026-09-08,
+        # commit aacda0b) -- confirmed present here too since this script's
+        # output (stage4_climo_on_graf.nc) predates that fix.
+        climo_on_graf[it, im, :, :, :] = result.reshape(NY_G, NX_G, NH).transpose(2, 0, 1)
 
         elapsed = time.time() - t0
         done    = it * NM + im + 1

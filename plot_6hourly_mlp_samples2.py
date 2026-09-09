@@ -25,6 +25,7 @@ Tom Hamill, May 2026
 
 import sys
 import os
+import math
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -32,9 +33,19 @@ import matplotlib.pyplot as plt
 from scipy.stats import gamma as sp_gamma
 from netCDF4 import Dataset
 from configparser import ConfigParser
+from dateutils import splitdate, dayofyear
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+
+def julian_features(cyyyymmddhh):
+    """Cyclic day-of-year encoding: cos/sin(2*pi*julian_day/365). Must match
+    sample_6hourly_prob_mrms.py / train_6hourly_mlp.py exactly."""
+    yyyy, mm, dd, hh = splitdate(cyyyymmddhh)
+    doy = dayofyear(yyyy, mm, dd)
+    angle = 2.0 * math.pi * doy / 365.0
+    return math.cos(angle), math.sin(angle)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants — must match train_6hourly_mlp.py
@@ -47,9 +58,10 @@ TRAIN_DIR    = os.path.join(SCRIPT_DIR, 'mlp_trainings')
 DOT_LON = -122.25
 DOT_LAT =   44.0
 
-SHAPE_MIN    = 0.1
-SCALE_MIN    = 0.01
-HIDDEN_SIZES = [72, 144, 72, 36, 12]
+SHAPE_MIN      = 0.1
+SCALE_MIN      = 0.01
+HIDDEN_SIZES   = [72, 144, 72, 36, 12]
+MIN_SEPARATION = 0.5
 
 FEATURE_VARS = [
     'fraction_zero', 'mixture_weight',
@@ -59,15 +71,19 @@ FEATURE_VARS = [
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Model (duplicated here to avoid import side-effects from training script)
+# Must match train_6hourly_mlp.py exactly (hard shape1/shape2 separation,
+# no post-hoc component reordering).
 # ─────────────────────────────────────────────────────────────────────────────
 
 class GammaMixtureMLP(nn.Module):
     def __init__(self, hidden_sizes=HIDDEN_SIZES,
-                 shape_min=SHAPE_MIN, scale_min=SCALE_MIN):
+                 shape_min=SHAPE_MIN, scale_min=SCALE_MIN, n_input=38,
+                 min_separation=MIN_SEPARATION):
         super().__init__()
         self.shape_min = shape_min
         self.scale_min = scale_min
-        layer_sizes = [36] + hidden_sizes
+        self.min_separation = min_separation
+        layer_sizes = [n_input] + hidden_sizes
         layers = []
         for in_sz, out_sz in zip(layer_sizes, layer_sizes[1:]):
             layers += [nn.Linear(in_sz, out_sz), nn.BatchNorm1d(out_sz), nn.ReLU()]
@@ -80,16 +96,10 @@ class GammaMixtureMLP(nn.Module):
         mix_weight = torch.sigmoid(raw[:, 1])
         shape1     = self.shape_min + F.softplus(raw[:, 2])
         scale1     = self.scale_min + F.softplus(raw[:, 3])
-        shape2     = self.shape_min + F.softplus(raw[:, 4])
-        scale2     = self.scale_min + F.softplus(raw[:, 5])
-        # Reorder so component 1 is always the drier one
-        swap           = (shape1 * scale1 > shape2 * scale2).float()
-        shape1_out     = (1 - swap) * shape1  + swap * shape2
-        scale1_out     = (1 - swap) * scale1  + swap * scale2
-        shape2_out     = (1 - swap) * shape2  + swap * shape1
-        scale2_out     = (1 - swap) * scale2  + swap * scale1
-        mix_weight_out = (1 - swap) * mix_weight + swap * (1 - mix_weight)
-        return frac_zero, mix_weight_out, shape1_out, scale1_out, shape2_out, scale2_out
+        shape2_offset = F.softplus(raw[:, 4])
+        shape2        = shape1 + shape2_offset + self.min_separation
+        scale2        = self.scale_min + F.softplus(raw[:, 5])
+        return frac_zero, mix_weight, shape1, scale1, shape2, scale2
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Distribution helpers (scipy — no gradients needed here)
@@ -306,6 +316,7 @@ def main():
         hidden_sizes=ckpt.get('hidden_sizes', HIDDEN_SIZES),
         shape_min=ckpt.get('shape_min', SHAPE_MIN),
         scale_min=ckpt.get('scale_min', SCALE_MIN),
+        n_input=ckpt.get('n_input', 38),
     )
     model.load_state_dict(ckpt['model_state_dict'])
     model.eval()
@@ -318,6 +329,9 @@ def main():
     print(f'Dot location: lon={DOT_LON}, lat={DOT_LAT}')
     raw_feat = load_pixel_from_prob_files(
         probs_dir, cyyyymmddhh, clead, DOT_LON, DOT_LAT)
+    cos_doy, sin_doy = julian_features(cyyyymmddhh)
+    raw_feat = np.concatenate(
+        [raw_feat, np.array([cos_doy, sin_doy], dtype=np.float32)])
 
     # ── plot ─────────────────────────────────────────────────────────────
     plt.rcParams.update(plt.rcParamsDefault)

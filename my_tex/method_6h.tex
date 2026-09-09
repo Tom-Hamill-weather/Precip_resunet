@@ -11,6 +11,8 @@
 \usepackage{enumitem}
 \usepackage{bm}
 \usepackage{float}
+\usepackage{lineno}
+\linenumbers
 % subcaption not needed: 3-panel compositing done in Python
 
 % --- Custom commands ---
@@ -163,19 +165,21 @@ The six distributional parameter fields from each of the six hourly forecasts
 are stacked, together with two cyclic day-of-year features encoding the
 sample's annual season, to form a 38-dimensional feature vector per
 training sample:
-\begin{equation}
+\begin{linenomath}
+\begin{multline}
   \vect{x} = \bigl[
     p_{0,1},\ldots,p_{0,6},\;
     w_1,\ldots,w_6,\;
     \alpha_{1,1},\ldots,\alpha_{1,6},\;
-    \theta_{1,1},\ldots,\theta_{1,6},\;
+    \theta_{1,1},\ldots,\theta_{1,6}, \\
     \alpha_{2,1},\ldots,\alpha_{2,6},\;
     \theta_{2,1},\ldots,\theta_{2,6},\;
     \cos\!\left(\tfrac{2\pi d}{365}\right),\;
     \sin\!\left(\tfrac{2\pi d}{365}\right)
   \bigr] \in \mathbb{R}^{38},
   \label{eq:feature_vec}
-\end{equation}
+\end{multline}
+\end{linenomath}
 where the second index in the vector elements above corresponds to the
 six consecutive hourly lead times, ordered from earliest to latest, and
 $d$ is the initial condition's day of year (1--365).  The cyclic day-of-year
@@ -306,6 +310,7 @@ Figure~\ref{fig:mlp_arch} provides a schematic of the architecture.
 The six raw logits $(z_0,\ldots,z_5)$ from the output linear layer are
 transformed to the six constrained distributional parameters using the same
 activation scheme as the hourly AttnResUNet:
+\begin{linenomath}
 \begin{align}
   p_0 &= \sigmoid(z_0), \\
   w   &= \sigmoid(z_1), \\
@@ -314,6 +319,7 @@ activation scheme as the hourly AttnResUNet:
   \alpha_2 &= \alpha_1 + \softplus(z_4) + \Delta_{\min}, \\
   \theta_2 &= \theta_{\min} + \softplus(z_5),
 \end{align}
+\end{linenomath}
 where $\alpha_{\min} = 0.1$, $\theta_{\min} = 0.01$, and $\Delta_{\min} = 0.5$.
 To resolve label switching between the two Gamma components, component~2's
 shape parameter is reparameterized as a hard structural offset from
@@ -394,12 +400,14 @@ The climatological zero fraction $\hat{p}_0$ is estimated directly from the
 training targets, and the bias $b_0 = \logit(\hat{p}_0)$ is set accordingly.
 For the wet pixels, a single Gamma distribution is fitted by the method of
 moments:
+\begin{linenomath}
 \begin{align}
   \hat{\mu}      &= \overline{y_{\text{wet}}}, \\
   \hat{\sigma}^2 &= \text{Var}(y_{\text{wet}}), \\
   \hat{\alpha}   &= \hat{\mu}^2 / \hat{\sigma}^2, \\
   \hat{\theta}   &= \hat{\sigma}^2 / \hat{\mu},
 \end{align}
+\end{linenomath}
 and the biases for both Gamma components are initialized to these values via
 the inverse softplus.  The mixture weight bias is set to zero (implying
 $w = 0.5$).  This single-Gamma initialization differs from the EM-based
