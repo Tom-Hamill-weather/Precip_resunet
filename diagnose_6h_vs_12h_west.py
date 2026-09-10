@@ -122,9 +122,9 @@ GRAFprobsdir, mrms_dir = read_config_file(config_file)
 
 # Climatology (needed only for the climo_mask — valid-pixel coverage)
 if ENVIRONMENT == 'aws':
-    climo_file = os.path.join(AWS_BASE_PATH, 'stage4_climo_on_graf.nc')
+    climo_file = os.path.join(AWS_BASE_PATH, 'stage4_climo_reference.nc')
 else:
-    climo_file = os.path.expanduser('~/python/resnet_data/stage4_climo_on_graf.nc')
+    climo_file = os.path.expanduser('~/python/resnet_data/stage4_climo_reference.nc')
 
 _nc = Dataset(climo_file, 'r')
 climo_prob_arr       = _nc.variables['climo_prob'][:]     # (nthresh,12,24,ny,nx)

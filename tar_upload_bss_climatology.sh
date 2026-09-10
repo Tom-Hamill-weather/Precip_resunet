@@ -1,17 +1,19 @@
 #!/bin/bash
-# Wait for interpolate_stage4_to_graf.py's bugfix regen to finish, then
-# bundle the corrected GRAF-grid BSS reference climatology into a tarball
-# and upload to s3://twc-nvidia for use on another AWS instance (Tom
-# 2026-09-09: need GRAF climatology available elsewhere for Brier Skill
-# Score computations).
+# Wait for build_stage4_climatology_reference.py to finish, then bundle the
+# canonical GRAF-grid BSS reference climatology into a tarball and upload
+# to s3://twc-nvidia for use on another AWS instance (Tom 2026-09-09: need
+# GRAF climatology available elsewhere for Brier Skill Score computations).
+#
+# This file (stage4_climo_reference.nc) is now the single shared BSS
+# reference for both this repo and HRRRcal -- HRRRcal's
+# stage4_climo_to_hrrr3km.py derives its 3-km-grid version from this same
+# array rather than maintaining an independent GRAF-grid copy, so there is
+# no separate HRRRcal-side GRAF climo to reconcile with anymore.
 #
 # Mirrors HRRRcal's tar_upload_bss_climatology.sh convention (tar cf, no
 # gzip -- .nc already zlib-compressed, verify with tar tf, upload via
-# aws s3 cp, verify via aws s3 ls byte count) but uploads under
-# s3://twc-nvidia/resnet/bss_climatology/ -- a separate key from
-# HRRRcal's own s3://twc-nvidia/hrrrcal/bss_climatology/, since this repo's
-# stage4_climo_on_graf.nc is an independently-generated file (this repo's
-# own interpolate_stage4_to_graf.py, not HRRRcal's stage4_climo_to_graf.py).
+# aws s3 cp, verify via aws s3 ls byte count), uploaded under
+# s3://twc-nvidia/resnet/bss_climatology/.
 set -uo pipefail
 
 cd /home/thamill/resnet
@@ -25,8 +27,8 @@ if ! flock -n 200; then
     exit 0
 fi
 
-REGEN_LOG=/data/resnet_data/interpolate_stage4_to_graf_refix.log
-GRAF_CLIMO=/data/resnet_data/stage4_climo_on_graf.nc
+REGEN_LOG=/data/resnet_data/build_stage4_climatology_reference.log
+GRAF_CLIMO=/data/resnet_data/stage4_climo_reference.nc
 TAR_PATH=/data/resnet_data/resnet_bss_climatology.tar
 S3_KEY=s3://twc-nvidia/resnet/bss_climatology/resnet_bss_climatology.tar
 
@@ -52,7 +54,7 @@ fi
 # ── tar (no gzip, matches HRRRcal convention) ──────────────────────────────
 
 echo "=== $(date -u +%FT%TZ) PHASE T: tar cf $TAR_PATH ==="
-tar cf "$TAR_PATH" -C /data/resnet_data stage4_climo_on_graf.nc
+tar cf "$TAR_PATH" -C /data/resnet_data stage4_climo_reference.nc
 if [ $? -ne 0 ]; then
     echo "$(date -u +%FT%TZ) PHASE T tar FAILED — pipeline stopping"
     exit 1

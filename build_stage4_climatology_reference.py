@@ -1,15 +1,24 @@
 #!/usr/bin/env python3
 """
-interpolate_stage4_to_graf.py
+build_stage4_climatology_reference.py
 
-One-time preprocessing: bilinearly interpolate the Stage IV climatological
-exceedance probabilities from the native polar-stereographic grid onto the
-GRAF 4-km Lambert-conformal grid, and write the result to a netCDF file.
+Canonical BSS-reference-climatology build, shared by both the GRAF (this
+repo) and HRRR (/home/thamill/HRRRcal) applications: interpolate the Stage
+IV climatological exceedance probabilities from the native polar-
+stereographic grid onto the GRAF 4-km Lambert-conformal grid (all 12
+months x all 24 UTC hours -- HRRR's own stage4_climo_to_hrrr3km.py
+re-derives its 3-km-grid version FROM this file, rather than
+re-interpolating from raw Stage IV, so both applications trace back to one
+canonical array instead of two independently-fitted ones).
 
 The GRAF lat/lon grid is read from any existing gamma-mixture probability
-file in the probs directory.
+file in the probs directory. Points outside Stage IV's native coverage
+(Canada, Mexico, ocean, high latitudes within the larger GRAF domain) are
+left NaN -- consumers already mask on isfinite(climo) for BSS scoring.
 
-Output: /data/resnet_data/stage4_climo_on_graf.nc
+Output: /data/resnet_data/stage4_climo_reference.nc
+  (formerly stage4_climo_on_graf.nc -- renamed to reflect its role as the
+  single shared reference for both GRAF and HRRR, not a GRAF-only artifact)
 
 Runtime: ~10-20 minutes (one Delaunay triangulation + 84 interpolation calls).
 """
@@ -24,7 +33,7 @@ from scipy.interpolate import LinearNDInterpolator
 
 BASE_DIR   = '/data/resnet_data'
 CLIMO_IN   = os.path.join(BASE_DIR, 'stage4_climo_2020_2024.nc')
-CLIMO_OUT  = os.path.join(BASE_DIR, 'stage4_climo_on_graf.nc')
+CLIMO_OUT  = os.path.join(BASE_DIR, 'stage4_climo_reference.nc')
 PROBS_DIR  = os.path.join(BASE_DIR, 'probs')
 
 # ── read GRAF grid from a sample probability file ──────────────────────────
@@ -87,9 +96,8 @@ for it in range(NT):
         # scrambles the hour and spatial axes, entangling each grid point's
         # stack of 24 true hours with an unrelated slice of neighboring
         # points. Same bug found and fixed in HRRRcal's
-        # stage4_climo_to_hrrr3km.py / stage4_climo_to_graf.py (2026-09-08,
-        # commit aacda0b) -- confirmed present here too since this script's
-        # output (stage4_climo_on_graf.nc) predates that fix.
+        # stage4_climo_to_hrrr3km.py (2026-09-08, commit aacda0b) -- confirmed
+        # present here too and fixed 2026-09-09.
         climo_on_graf[it, im, :, :, :] = result.reshape(NY_G, NX_G, NH).transpose(2, 0, 1)
 
         elapsed = time.time() - t0
@@ -118,8 +126,12 @@ v = ds.createVariable('climo_prob', 'f4',
 v[:] = climo_on_graf
 v.long_name = '1-h precipitation exceedance climatological probability on GRAF grid'
 v.units     = '1'
-v.comment   = ('Bilinearly interpolated from Stage IV polar-stereo grid '
-               '(stage4_climo_2020_2024.nc) to GRAF 4-km Lambert-conformal grid')
+v.comment   = ('Canonical BSS-reference climatology, shared by GRAF and HRRR '
+               'applications. Interpolated from Stage IV polar-stereo grid '
+               '(stage4_climo_2020_2024.nc) to GRAF 4-km Lambert-conformal grid. '
+               'HRRR 3-km grid version (stage4_climo_on_hrrr3km.nc, in '
+               '/home/thamill/HRRRcal) is derived from this same array, not '
+               're-fit from raw Stage IV.')
 
 vt = ds.createVariable('threshold', 'f4', ('threshold',))
 vt[:] = thresholds;  vt.units = 'mm';  vt.long_name = 'Exceedance threshold'

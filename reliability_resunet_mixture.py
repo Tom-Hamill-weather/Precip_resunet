@@ -461,10 +461,10 @@ os.makedirs(daily_cache_dir, exist_ok=True)
 # ---- Read pre-interpolated Stage IV climatology on the GRAF grid
 
 if ENVIRONMENT == 'aws':
-    climo_graf_file = os.path.join(AWS_BASE_PATH, 'stage4_climo_on_graf.nc')
+    climo_graf_file = os.path.join(AWS_BASE_PATH, 'stage4_climo_reference.nc')
 else:
     climo_graf_file = os.path.expanduser(
-        '~/python/resnet_data/stage4_climo_on_graf.nc')
+        '~/python/resnet_data/stage4_climo_reference.nc')
 
 _nc = Dataset(climo_graf_file, 'r')
 # NOTE: climo_prob is (7,12,24,ny,nx) float32 -- ~16 GB if loaded fully into

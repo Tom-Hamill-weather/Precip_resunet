@@ -414,10 +414,10 @@ os.makedirs(relia_dir, exist_ok=True)
 # ---- Read pre-interpolated Stage IV climatology on the GRAF grid
 
 if ENVIRONMENT == 'aws':
-    climo_graf_file = os.path.join(AWS_BASE_PATH, 'stage4_climo_on_graf.nc')
+    climo_graf_file = os.path.join(AWS_BASE_PATH, 'stage4_climo_reference.nc')
 else:
     climo_graf_file = os.path.expanduser(
-        '~/python/resnet_data/stage4_climo_on_graf.nc')
+        '~/python/resnet_data/stage4_climo_reference.nc')
 
 _nc = Dataset(climo_graf_file, 'r')
 climo_prob_arr       = _nc.variables['climo_prob'][:]    # (7,12,24,ny,nx)
