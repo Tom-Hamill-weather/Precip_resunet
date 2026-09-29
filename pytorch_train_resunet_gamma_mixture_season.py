@@ -8,10 +8,41 @@ ResUNet, porting the two HRRRcal training-recipe choices Tom asked about
      from every available year of that season rather than one ~8-month
      recency window per IC date. Leakage-safe 7-day-block holdout split
      (graf_season_index.build_seasonal_index).
-  2. FiLM-condition the ResUNet on [sin_doy, cos_doy, sin_solar_hour,
-     cos_solar_hour, lead/72] (resunet_film.AttnResUNetFiLM) so the single
-     season model covers all lead times 3-72h instead of needing one model
-     per lead.
+  2. FiLM-condition the ResUNet on [sin_doy, cos_doy, lead/72]
+     (resunet_film.AttnResUNetFiLM, cond_dim=3) so the single season model
+     covers all lead times 3-72h instead of needing one model per lead.
+     Solar-hour is NOT part of this FiLM vector - see below.
+
+Local-solar-hour channels (this replaces the original design): solar hour
+varies spatially (by longitude), so as a single global FiLM scalar per
+patch it only used each patch's CENTER longitude - fine within one ~4-deg
+patch during training, but it meant inference could only use the same
+per-patch-center approximation, which is why
+resunet_inference_gamma_mixture_season.py still tiles the domain into
+overlapping patches with Manhattan blending instead of doing one true
+whole-domain forward pass. Promoting solar-hour to two per-pixel INPUT
+channels (sin(local_solar_hour), cos(local_solar_hour), from the real lon
+grid - see pytorch_train_resunet_biascorrect_season.local_solar_hour_sincos,
+reused unchanged here) removes that constraint entirely: the model sees the
+exact per-pixel value everywhere, so a single whole-domain forward pass
+becomes exact rather than approximate, matching the biascorrect_season /
+gamma_climatology_season design. in_channels goes 7 -> 9, cond_dim goes
+5 -> 3. This is a breaking checkpoint-format change - old
+resunet_gamma_mixture_season_{season}_best.pth files were backed up to
+*_best.pth.pre_perpixel_bak before this retrain, and
+resunet_inference_gamma_mixture_season.py needs the matching full-domain
+rewrite (tracked separately, not yet done as of this change).
+
+Precip-climatology channel (added 2026-09-23, second breaking change):
+Tom's concern is that sin/cos(doy) FiLM conditioning + local terrain
+gradients alone can't reproduce PRISM-sharp forecast/observed
+climatology - the model has no absolute-location "expected climatology"
+prior, only relative terrain shape. Added a 10th input channel,
+'precip_climo' (see graf_precip_climo.py), from a GRAF-grid PRISM+
+WorldClim+ERA5 blend (build_precip_climo_graf.py, ported from HRRRcal's
+build_precip_climo.py since GRAF's real domain - 7-63N, -141 to -40E -
+extends far beyond PRISM's US-only coverage). in_channels goes 9 -> 10.
+Old checkpoints backed up to *_best.pth.pre_climo_bak.
 
 Everything else (backbone architecture, 2-component Gamma mixture NLL loss,
 EM-fit climatology bias init, Adam wd=0, sqrt power-transform, H/V-flip
@@ -33,15 +64,21 @@ Checkpoints: {TRAIN_DIR}/resunet_gamma_mixture_season_{season}_best.pth
 
 import argparse
 import os
+from collections import OrderedDict
 
 import numpy as np
 import torch
 import torch.optim as optim
-import zarr
 from torch.utils.data import DataLoader, Dataset
 
 from gamma_mixture_em import fit_gamma_mixture
-from graf_season_index import LEAD_MAX, SEASON_MONTHS, build_seasonal_index, make_cond
+from graf_precip_climo import sample_climo_patch
+from graf_precip_climo import preload as preload_precip_climo
+from graf_season_index import (
+    LEAD_MAX, SEASON_MONTHS, ChunkShuffleSampler, build_seasonal_index, make_cond,
+    read_patch_cached,
+)
+from pytorch_train_resunet_biascorrect_season import local_solar_hour_sincos
 from pytorch_train_resunet_gamma_mixture_v2 import (
     AMP_DTYPE, BASE_DIR, BASE_LEARNING_RATE, BATCH_SIZE, DEVICE,
     EARLY_STOPPING_PATIENCE, GammaMixtureNLLLoss, NUM_EPOCHS, NUM_WORKERS,
@@ -51,6 +88,11 @@ from pytorch_train_resunet_gamma_mixture_v2 import (
 from resunet_film import AttnResUNetFiLM
 
 GRAF_SEASON_POOLS_DIR = os.path.join(BASE_DIR, 'graf_season_pools')
+
+# Channel order for the 10-channel input stack (dataset stacking order here
+# must match the inference script's rebuild order exactly).
+CH_ORDER = ['graf', 'terrain_diff', 'gfs_r', 'terdiff_graf', 'graf_rh',
+            'dlon', 'dlat', 'sin_sh', 'cos_sh', 'precip_climo']
 
 # Fixed normalization bounds (vs v2's per-run data-derived min/max): the
 # season pool is far too large to scan for exact min/max, so use the same
@@ -68,20 +110,29 @@ NORM_BOUNDS = {
     'graf_rh':      (0.0, _G75 * 100.0),
     'dlon':         (-0.02, 0.02),
     'dlat':         (-0.02, 0.02),
+    'sin_sh':       (-1.0, 1.0),
+    'cos_sh':       (-1.0, 1.0),
+    'precip_climo': (0.0, 1.0),   # already log1p-normalized, see graf_precip_climo.py
 }
+
+
+_POOL_VARS = ['GRAF', 'MRMS', 'MRMS_qual', 'terrain_diff', 'dt_dlon', 'dt_dlat', 'GFS_r']
 
 
 class GRAFSeasonDataset(Dataset):
     """Lazily reads GRAF season/lead-pooled zarr patches (see
-    graf_season_index.py for the pool contract). Mirrors HRRRcal's
-    HRRRPatchDataset lazy-open-per-worker pattern
-    (pytorch_train_hrrr_gamma_mixture.py:476-544)."""
+    graf_season_index.py for the pool contract), via a small per-worker
+    LRU cache of whole decompressed chunks (graf_season_index.
+    read_patch_cached) rather than one zarr read per patch - see that
+    function's docstring for why (a single-index zarr read decompresses
+    and discards the whole chunk regardless of locality)."""
 
     def __init__(self, index, train=False, power_transform=POWER_TRANSFORM):
         self.index = index  # list of (zarr_path, patch_idx, day, cycle, lead, lat, lon)
         self.train = train
         self.power_transform = power_transform
-        self._zstore = {}  # per-worker-process zarr group cache, opened lazily
+        self._zstore = {}          # per-worker zarr group cache, opened lazily
+        self._chunk_cache = OrderedDict()  # per-worker LRU cache of decompressed chunks
 
     def __len__(self):
         return len(self.index)
@@ -94,22 +145,30 @@ class GRAFSeasonDataset(Dataset):
 
     def __getitem__(self, i):
         zarr_path, pidx, day, cycle, lead, lat, lon = self.index[i]
-        if zarr_path not in self._zstore:
-            self._zstore[zarr_path] = zarr.open_group(zarr_path, mode='r')
-        grp = self._zstore[zarr_path]
+        fields = read_patch_cached(self._zstore, self._chunk_cache, zarr_path, pidx, _POOL_VARS)
 
-        graf  = np.array(grp['GRAF'][pidx],         dtype=np.float32)
-        mrms  = np.array(grp['MRMS'][pidx],         dtype=np.float32)
-        qual  = np.array(grp['MRMS_qual'][pidx],    dtype=np.float32)
-        diff  = np.array(grp['terrain_diff'][pidx], dtype=np.float32)
-        dlon  = np.array(grp['dt_dlon'][pidx],      dtype=np.float32)
-        dlat  = np.array(grp['dt_dlat'][pidx],      dtype=np.float32)
-        gfs_r = np.array(grp['GFS_r'][pidx],        dtype=np.float32)
+        graf  = fields['GRAF'].astype(np.float32)
+        mrms  = fields['MRMS'].astype(np.float32)
+        qual  = fields['MRMS_qual'].astype(np.float32)
+        diff  = fields['terrain_diff'].astype(np.float32)
+        dlon  = fields['dt_dlon'].astype(np.float32)
+        dlat  = fields['dt_dlat'].astype(np.float32)
+        gfs_r = fields['GFS_r'].astype(np.float32)
 
         if self.power_transform != 1.0:
             graf = np.power(np.clip(graf, 0.0, None), self.power_transform)
         terdiff_graf = graf * diff
         graf_rh = graf * gfs_r
+
+        # True per-pixel local-solar-hour channels (patch-center lon here,
+        # since training patches are only ~4 deg wide - inference uses the
+        # real per-pixel lon grid instead, see local_solar_hour_sincos).
+        sin_sh_val, cos_sh_val = local_solar_hour_sincos(cycle, lead, lon)
+        sin_sh = np.full_like(graf, sin_sh_val, dtype=np.float32)
+        cos_sh = np.full_like(graf, cos_sh_val, dtype=np.float32)
+
+        month = (day // 100) % 100
+        climo = sample_climo_patch(month, lat, lon)  # already log1p-normalized to [0,1]
 
         x = np.stack([
             self._normalize(graf,         'graf'),
@@ -119,12 +178,17 @@ class GRAFSeasonDataset(Dataset):
             self._normalize(graf_rh,      'graf_rh'),
             self._normalize(dlon,         'dlon'),
             self._normalize(dlat,         'dlat'),
+            self._normalize(sin_sh,       'sin_sh'),
+            self._normalize(cos_sh,       'cos_sh'),
+            self._normalize(climo,        'precip_climo'),
         ], axis=0).astype(np.float32)
 
         y = mrms.copy()
         y[qual <= 0.01] = -1.0
 
-        cond = make_cond(day, cycle, lead, lon, lead_max=LEAD_MAX)
+        # Keep only [sin_doy, cos_doy, lead_norm] for FiLM - solar-hour is
+        # now an input channel above, not a conditioning scalar.
+        cond = make_cond(day, cycle, lead, lon, lead_max=LEAD_MAX)[[0, 1, 4]]
 
         if self.train:
             x, y = self._augment(x, y)
@@ -134,7 +198,9 @@ class GRAFSeasonDataset(Dataset):
     @staticmethod
     def _augment(x, y):
         # Same H/V-flip-with-gradient-sign-flip augmentation as v2 (channels
-        # 5=dlon, 6=dlat).
+        # 5=dlon, 6=dlat); sin_sh/cos_sh (7, 8) and precip_climo (9) are
+        # left alone (not gradients, no sign to flip) - np.flip already
+        # reorders their spatial layout along with everything else.
         if np.random.rand() > 0.5:
             x = np.flip(x, axis=2).copy(); y = np.flip(y, axis=1).copy()
             x[5] = -x[5]
@@ -193,14 +259,21 @@ def compute_gamma_mixture_climatology_season(train_dataset, n_sample=1000):
 
 
 def train_season(season, max_epochs=None, patience=None, init_from=None,
-                 patches_dir=None, year=None):
+                 patches_dir=None, year=None, max_patches=None):
     patches_dir = patches_dir or GRAF_SEASON_POOLS_DIR
     train_idx = build_seasonal_index(patches_dir, season, holdout=False, year=year)
     val_idx   = build_seasonal_index(patches_dir, season, holdout=True,  year=year)
+
+    if max_patches is not None:
+        train_idx = train_idx[:max_patches]
+        val_idx = val_idx[:max(1, max_patches // 5)]
+
     print(f'Season {season}: {len(train_idx)} train patches, {len(val_idx)} holdout patches '
           f'(pools: {patches_dir})')
     if not train_idx:
         raise RuntimeError(f'No training patches found for season {season} in {patches_dir}')
+
+    preload_precip_climo()  # load once now, before DataLoader workers fork
 
     train_dataset = GRAFSeasonDataset(train_idx, train=True)
     val_dataset   = GRAFSeasonDataset(val_idx,   train=False)
@@ -209,17 +282,22 @@ def train_season(season, max_epochs=None, patience=None, init_from=None,
 
     pin = (DEVICE.type != 'cpu')
     persist = NUM_WORKERS > 0
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True,
+    train_sampler = ChunkShuffleSampler(train_idx)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, sampler=train_sampler,
                               num_workers=NUM_WORKERS, pin_memory=pin,
                               persistent_workers=persist)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False,
                             num_workers=NUM_WORKERS, pin_memory=pin,
                             persistent_workers=persist)
 
-    model = AttnResUNetFiLM(in_channels=7, num_outputs=6, cond_dim=5).to(DEVICE)
+    model = AttnResUNetFiLM(in_channels=10, num_outputs=6, cond_dim=3).to(DEVICE)
     initialize_output_layer(model, climatology)
 
-    checkpoint_path = f'{TRAIN_DIR}/resunet_gamma_mixture_season_{season}_best.pth'
+    # max_patches means this is a smoke test - use a distinct filename so
+    # it can never collide with (or accidentally overwrite) the real
+    # per-season production checkpoint.
+    tag = '_smoketest' if max_patches is not None else ''
+    checkpoint_path = f'{TRAIN_DIR}/resunet_gamma_mixture_season_{season}{tag}_best.pth'
     start_epoch = 0
     best_val_loss = float('inf')
     epochs_no_improve = 0
@@ -305,10 +383,12 @@ def train_season(season, max_epochs=None, patience=None, init_from=None,
                 'climatology': climatology,
                 'power_transform': POWER_TRANSFORM,
                 'normalization_bounds': NORM_BOUNDS,
+                'channel_order': CH_ORDER,
                 'season': season,
                 'lead_max': LEAD_MAX,
-                'cond_dim': 5,
-                'architecture': 'season_film_v1',
+                'in_channels': 10,
+                'cond_dim': 3,
+                'architecture': 'season_film_v3_precip_climo',
             }, checkpoint_path)
             print(f'  -> saved best model: {checkpoint_path}')
         else:
@@ -334,12 +414,15 @@ def main():
     ap.add_argument('--patches-dir', default=None, dest='patches_dir')
     ap.add_argument('--year', type=int, default=None,
                     help='restrict to one calendar year (debugging/pilot use)')
+    ap.add_argument('--max-patches', type=int, default=None, dest='max_patches',
+                    help='truncate train/val index to this many patches (smoke testing)')
     args = ap.parse_args()
 
     print(f'Device: {DEVICE}  Batch size: {BATCH_SIZE}  Season: {args.season}  '
           f'Lead range: 3-{LEAD_MAX}h')
     train_season(args.season, max_epochs=args.max_epochs, patience=args.patience,
-                init_from=args.init_from, patches_dir=args.patches_dir, year=args.year)
+                init_from=args.init_from, patches_dir=args.patches_dir, year=args.year,
+                max_patches=args.max_patches)
 
 
 if __name__ == '__main__':

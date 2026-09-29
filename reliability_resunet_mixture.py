@@ -373,27 +373,49 @@ def compute_relia(contab, ncats):
 # --------------------------------------------------------
 
 clead = sys.argv[1]
-# model_tag selects which inference output to score: 'baseline' (the
-# per-lead/per-month-retrained model, default, preserves old filenames/
-# cache exactly) or 'season' (the season-pooled + FiLM lead-pooled model).
-# Kept separate from probs_suffix's default so cache/output filenames
-# never collide between the two models when scoring the same date/lead.
+
+# Registry of every model version this script knows how to score, keyed by
+# model_tag. Each entry's probs_suffix/cache_tag/out_model_name are kept
+# distinct per version so their daily_contab caches and relia_dir output
+# cPickles (contingency tables + Brier scores/BSS, saved further below)
+# never collide -- once a version has been scored here, comparing it
+# against any other scored version is just a matter of loading both
+# cPickles, no re-running of inference or re-reading of raw prob/MRMS data.
+# Add one entry per new model version tested; nothing else in this script
+# needs to change.
+MODEL_REGISTRY = {
+    # 'baseline': the original per-lead/per-month-retrained model.
+    'baseline': dict(probs_suffix='_probs_gamma_mixture.nc',
+                      cache_tag='', out_model_name='ResUNet_Mixture'),
+    # 'season': current production season-pooled + FiLM lead-pooled model
+    # (retrained 2026-09-26 with per-pixel solar-hour + precip_climo channels).
+    'season': dict(probs_suffix='_probs_gamma_mixture_season.nc',
+                    cache_tag='_season', out_model_name='ResUNet_Mixture_Season'),
+    # 'season_prev': immediately preceding season+FiLM checkpoint
+    # (7ch/cond_dim=5, patch-tiled+Manhattan, *_best.pth.pre_perpixel_bak),
+    # scored from probs written by
+    # resunet_inference_gamma_mixture_season_prevckpt.py. Lets a reliability
+    # comparison isolate the effect of the 2026-09-26 retrain from the prior
+    # season+FiLM generation, without touching the production season probs
+    # archive.
+    'season_prev': dict(probs_suffix='_probs_gamma_mixture_season_prevckpt.nc',
+                         cache_tag='_season_prev',
+                         out_model_name='ResUNet_Mixture_Season_PrevCkpt'),
+}
+
+# model_tag selects which registered model version to score.
 model_tag = sys.argv[2] if len(sys.argv) > 2 else 'baseline'
 # date_set selects the representative-month sample: '2025' is the original
 # one-month-per-season sample used for all prior baseline evaluations;
 # '2026h1' is the equivalent sample drawn from the independent Jan-Jun 2026
 # data (Jan/Apr/Jun as DJF/MAM/JJA proxies -- no SON proxy exists in H1).
 date_set = sys.argv[3] if len(sys.argv) > 3 else '2025'
-if model_tag == 'season':
-    probs_suffix = '_probs_gamma_mixture_season.nc'
-    cache_tag = '_season'
-    out_model_name = 'ResUNet_Mixture_Season'
-elif model_tag == 'baseline':
-    probs_suffix = '_probs_gamma_mixture.nc'
-    cache_tag = ''
-    out_model_name = 'ResUNet_Mixture'
-else:
-    raise ValueError(f"Unknown model_tag '{model_tag}', expected 'baseline' or 'season'")
+if model_tag not in MODEL_REGISTRY:
+    raise ValueError(
+        f"Unknown model_tag '{model_tag}', expected one of {sorted(MODEL_REGISTRY)}")
+probs_suffix = MODEL_REGISTRY[model_tag]['probs_suffix']
+cache_tag = MODEL_REGISTRY[model_tag]['cache_tag']
+out_model_name = MODEL_REGISTRY[model_tag]['out_model_name']
 print(f"reliability_resunet_mixture.py lead={clead}h model_tag={model_tag} date_set={date_set}")
 cmtit = 'GRAF'
 pthresholds = [0.25, 1.0, 2.5, 5.0, 10.0]
@@ -422,8 +444,14 @@ elif date_set == '2025h1':
     apr = daterange('2025040100','2025043018',6)
     jun = daterange('2025060100','2025063018',6)
     cyyyymmddhh_list = jan + apr + jun
+elif date_set == 'jan_aug_2026':
+    # Full daily record (every 6-hourly cycle), not a representative-month
+    # sample -- matches the coverage of
+    # control_resunet_inference_2026_season_jan_aug[_prevckpt].py.
+    cyyyymmddhh_list = daterange('2026010100', '2026083118', 6)
 else:
-    raise ValueError(f"Unknown date_set '{date_set}', expected '2025', '2026h1', or '2025h1'")
+    raise ValueError(
+        f"Unknown date_set '{date_set}', expected '2025', '2026h1', '2025h1', or 'jan_aug_2026'")
 ndates = len(cyyyymmddhh_list)
 
 # --- read paths to data
@@ -481,6 +509,28 @@ for thresh in pthresholds:
     if abs(float(climo_thresholds_arr[idx]) - thresh) > 0.01:
         print(f"WARNING: threshold {thresh} mm not found in climatology file")
     climo_tidx.append(idx)
+
+# climo_prob is chunked (1,2,5,ny,nx) on disk, so a per-threshold, per-date
+# scalar lookup (as done previously) forces HDF5 to decompress a multi-month/
+# multi-hour chunk far larger than the single (ny,nx) plane actually needed --
+# this is what drove anon-rss to 16 GB and OOM-killed the script. Since the
+# date loop below only ever needs the plane for the date's (month, hour) of
+# validity, and that combination repeats across every year in the date range,
+# cache each plane the first time it's read. At most 12 months x 24 hours
+# combinations exist, and in practice only the handful of hours present in
+# the requested date list are ever hit, so this stays a small fraction of the
+# full 16 GB array.
+_climo_plane_cache = {}
+
+
+def _get_climo_planes(month_idx, hour_idx):
+    key = (month_idx, hour_idx)
+    planes = _climo_plane_cache.get(key)
+    if planes is None:
+        planes = np.moveaxis(
+            climo_prob_arr[climo_tidx, month_idx, hour_idx], 0, -1)
+        _climo_plane_cache[key] = planes
+    return planes
 
 # ---- Declare running-sum accumulators
 
@@ -610,11 +660,9 @@ for idate, date in enumerate(cyyyymmddhh_list):
     validity_month_idx = int(validity_date[4:6]) - 1   # 0-indexed (0=Jan)
     validity_utc_hour  = int(validity_date[8:10])
 
-    # Stack needed thresholds: shape (ny, nx, nthresholds)
-    climo_all = np.stack([
-        climo_prob_arr[climo_tidx[i], validity_month_idx, validity_utc_hour]
-        for i in range(nthresholds)
-    ], axis=-1)
+    # Shape (ny, nx, nthresholds); cached per (month, hour) -- see
+    # _get_climo_planes above.
+    climo_all = _get_climo_planes(validity_month_idx, validity_utc_hour)
 
     # ---- Accumulate contingency table and BS for each threshold
     # (vectorized: see accumulate_threshold_stats -- one consolidated pass

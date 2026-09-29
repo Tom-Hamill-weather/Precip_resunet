@@ -19,9 +19,12 @@ build_patch_pools_graf.py):
 
 import datetime
 import os
+import random
+from collections import OrderedDict
 
 import numpy as np
 import zarr
+from torch.utils.data import Sampler
 
 SEASON_MONTHS = {
     'DJF': {12, 1, 2},
@@ -31,6 +34,9 @@ SEASON_MONTHS = {
 }
 
 LEAD_MAX = 72  # matches build_patch_pools_graf.py's LEADS = range(3, 73, 3)
+
+# matches build_patch_pools_graf.py:131's create_array(..., chunks=(64, 96, 96))
+POOL_CHUNK_SIZE = 64
 
 
 def _yyyymm_list(patches_dir):
@@ -117,3 +123,97 @@ def make_cond(day, cycle, lead, center_lon, lead_max=LEAD_MAX):
 
     lead_norm = lead / float(lead_max)
     return np.array([sin_doy, cos_doy, sin_sh, cos_sh, lead_norm], dtype=np.float32)
+
+
+class ChunkShuffleSampler(Sampler):
+    """Shuffle at zarr-chunk granularity instead of fully-random per-item
+    shuffling.
+
+    The season pools are written with 64-patch chunks along axis 0
+    (build_patch_pools_graf.py:131, POOL_CHUNK_SIZE above). A fully random
+    single-patch shuffle (torch DataLoader's default shuffle=True) makes
+    every __getitem__ call decompress an entire 64-patch chunk to return
+    the one patch asked for - a ~64x amplification of bytes decompressed
+    per useful patch, with no page-cache reuse across epochs since one
+    season's raw footprint (100+ GB) is far larger than typical available
+    RAM (measured 29 GB on the training box, already under memory
+    pressure). It's a steady-state tax paid every epoch, not a one-time
+    warm-up cost.
+
+    This groups the dataset index by (zarr_path, chunk_id), shuffles the
+    order of chunks each epoch, and shuffles the (already-decompressed,
+    free) order of items within each chunk - most of the epoch-to-epoch
+    randomization benefit, without forcing random single-patch disk
+    access. Trade-off: patches within one mini-batch are now more likely
+    to come from the same source chunk (same month, nearby patch_idx)
+    than under a fully random shuffle - a deliberate call given the I/O
+    cost, not a free lunch.
+
+    Use as `DataLoader(dataset, sampler=ChunkShuffleSampler(index), ...)`
+    (omit shuffle=True - a Sampler and shuffle=True are mutually
+    exclusive in DataLoader).
+    """
+
+    def __init__(self, index, chunk_size=POOL_CHUNK_SIZE):
+        groups = {}
+        for i, entry in enumerate(index):
+            zarr_path, pidx = entry[0], entry[1]
+            key = (zarr_path, pidx // chunk_size)
+            groups.setdefault(key, []).append(i)
+        self.groups = list(groups.values())
+        self._length = len(index)
+
+    def __iter__(self):
+        order = list(range(len(self.groups)))
+        random.shuffle(order)
+        for gi in order:
+            group = self.groups[gi][:]
+            random.shuffle(group)
+            yield from group
+
+    def __len__(self):
+        return self._length
+
+
+def read_patch_cached(zstore, chunk_cache, zarr_path, pidx, var_names,
+                      chunk_size=POOL_CHUNK_SIZE, max_chunks=4):
+    """Fetch one patch's fields via a small per-worker LRU cache of whole,
+    already-decompressed zarr chunks.
+
+    Reading a single item from a chunked zarr array (`arr[pidx]`) still
+    decompresses the WHOLE chunk internally and discards everything but
+    the one requested row - every single call, even repeated calls to the
+    same chunk. Measured on this pool (64-patch chunks): 64 separate
+    single-index reads of one chunk took 0.14s; one bulk chunk-aligned
+    slice read of the same 64 patches took 0.003s - a ~42x difference.
+    ChunkShuffleSampler only fixes the ORDER chunks are visited in; this
+    is what actually avoids paying that decompression cost once per
+    patch instead of once per chunk.
+
+    `zstore`/`chunk_cache` are the calling Dataset's own per-worker dicts
+    (plain {} and collections.OrderedDict() respectively, created once in
+    __init__ - each DataLoader worker process gets its own independent
+    copy at fork, same lazy-open-per-worker pattern as `zstore` alone
+    already used). `chunk_cache` must be an OrderedDict for LRU eviction.
+    max_chunks is small on purpose: with ChunkShuffleSampler, a given
+    chunk's members only appear together in the 1-2 batches they land in,
+    then aren't revisited for the rest of the epoch - no benefit to
+    caching more than a handful of chunks at once.
+    """
+    if zarr_path not in zstore:
+        zstore[zarr_path] = zarr.open_group(zarr_path, mode='r')
+    grp = zstore[zarr_path]
+
+    chunk_id = pidx // chunk_size
+    key = (zarr_path, chunk_id)
+    if key not in chunk_cache:
+        start = chunk_id * chunk_size
+        end = start + chunk_size
+        chunk_cache[key] = {v: np.asarray(grp[v][start:end]) for v in var_names}
+        if len(chunk_cache) > max_chunks:
+            chunk_cache.popitem(last=False)
+    else:
+        chunk_cache.move_to_end(key)
+
+    offset = pidx - chunk_id * chunk_size
+    return {v: chunk_cache[key][v][offset] for v in var_names}
