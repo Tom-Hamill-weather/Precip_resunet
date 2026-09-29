@@ -4,9 +4,18 @@ This guide is for adapting **probviewer** and the **operational inference**
 pipeline to the current production precipitation-postprocessing model,
 replacing the old per-(month, lead) checkpoint scheme. It assumes the
 reader has the `Precip_resunet` git repo checked out and is copying the
-4 season checkpoints (and this file) from
-`s3://twc-nvidia/resunet-precip/gamma_mixture_season_v3_precip_climo/`
-(see the main session's chat for the exact path/report).
+4 season checkpoints, this file, and the supporting data files from
+`s3://twc-nvidia/resunet-precip/gamma_mixture_season_v3_precip_climo/`:
+
+```
+gamma_mixture_season_v3_precip_climo/
+├── resunet_gamma_mixture_season_{DJF,MAM,JJA,SON}_best.pth   (checkpoints)
+├── SEASON_GAMMA_MIXTURE_DEPLOYMENT_GUIDE.md                  (this file)
+└── support_data/
+    ├── precip_climo_graf.nc            (inference: precip-climatology input channel)
+    ├── terrain_roughness_mask_graf.nc  (verification: top-10%/bottom-90% terrain masks)
+    └── stage4_climo_reference.nc       (verification: BSS climatological reference, 1.8 GiB)
+```
 
 ## 1. What changed, in one paragraph
 
@@ -51,25 +60,45 @@ If your operational pipeline vendors/copies individual files instead of
 running from a full checkout, copy all of the above together -- they
 import from each other.
 
-## 3. Data dependency NOT in git: the precip-climatology file
+## 3. Data dependencies NOT in git: climatology and terrain-mask files
 
-`graf_precip_climo.py` hard-codes this path:
+None of these are checked into git (data files are gitignored). All
+three are included under `support_data/` in the S3 upload (see the
+tree above) -- copy them to the target system(s) and either place
+each at the exact path its consuming script hard-codes, or edit that
+path to point at wherever you put it.
 
-```
-PRECIP_CLIMO_NC = '/data/resnet_data/static/precip_climo_graf.nc'
-```
+**Required for inference:**
 
-This is a static (12, ny, nx) mm/month PRISM+WorldClim+ERA5 blend on
-the GRAF grid, built by `build_precip_climo_graf.py`. It is **not**
-checked into git (data files are gitignored) and was **not** included
-in the S3 upload alongside the weights -- only the 4 checkpoints and
-this guide were uploaded, per what was asked for. **You need to copy
-this file to the target system(s) yourself** (e.g. the same
-scp/rsync convention already used for `resnet_data` in the main repo's
-`CLAUDE.md`), and either place it at that exact path or edit
-`PRECIP_CLIMO_NC` in `graf_precip_climo.py` to point at wherever you
-put it. Ask if you'd like this file added to the S3 bundle too --
-it's ~48 MB, cheap to add.
+- `precip_climo_graf.nc` -- static (12, ny, nx) mm/month
+  PRISM+WorldClim+ERA5 blend on the GRAF grid, built by
+  `build_precip_climo_graf.py`. Read by `graf_precip_climo.py`, which
+  hard-codes:
+  ```
+  PRECIP_CLIMO_NC = '/data/resnet_data/static/precip_climo_graf.nc'
+  ```
+
+**Required for verification (BSS/reliability scoring), not for inference itself:**
+
+- `stage4_climo_reference.nc` (1.8 GiB) -- the canonical NCEP Stage IV
+  2020--2024 climatological reference used by `reliability_resunet_mixture.py`
+  to compute Brier Skill Score against climatology. Hard-coded in that
+  script as:
+  ```
+  climo_graf_file = os.path.join(AWS_BASE_PATH, 'stage4_climo_reference.nc')  # AWS
+  climo_graf_file = os.path.expanduser('~/python/resnet_data/stage4_climo_reference.nc')  # laptop
+  ```
+  Several older/superseded files with similar names exist on the
+  training system (`stage4_climo_2020_2024.nc`, `stage4_climo_on_graf.nc`,
+  `stage4_climo_on_graf_PREBUGFIX_20260505.nc`) -- do **not** copy
+  those; `stage4_climo_reference.nc` is the current canonical one and
+  the only one actually read by the verification code.
+- `terrain_roughness_mask_graf.nc` (10 MB) -- boolean top-10%/bottom-90%
+  terrain-roughness masks, also read unconditionally by
+  `reliability_resunet_mixture.py` at import time (it will fail to even
+  start without this file, regardless of whether you care about the
+  terrain-stratified breakdown). Expected in the same directory as that
+  script unless you edit its `_mask_nc_path`.
 
 ## 4. Checkpoint files
 
