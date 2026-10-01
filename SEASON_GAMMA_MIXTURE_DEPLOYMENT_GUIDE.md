@@ -1,5 +1,16 @@
 # Deploying the season-pooled, FiLM-conditioned Gamma-mixture ResUNet
 
+> **Checkpoint generation as of 2026-09-29: `v3`**
+> (S3 prefix `gamma_mixture_season_v3_precip_climo/`, checkpoint
+> `architecture` field `season_film_v3_precip_climo`, `in_channels=10`,
+> `cond_dim=3` -- see \S4). Checkpoints get retrained periodically and
+> the input-channel count/order can change between generations (e.g.
+> the v3 cutover added `precip_climo` as a 10th channel). **When that
+> happens again, update this line, the S3 prefix above, and \S4's
+> "Current metadata" block** -- don't trust this note once its date is
+> stale; always verify against the `architecture`/`in_channels`/
+> `cond_dim` fields actually read from the checkpoint you're loading.
+
 This guide is for adapting **probviewer** and the **operational inference**
 pipeline to the current production precipitation-postprocessing model,
 replacing the old per-(month, lead) checkpoint scheme. It assumes the
