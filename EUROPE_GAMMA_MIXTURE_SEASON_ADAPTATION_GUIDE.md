@@ -5,6 +5,13 @@ deployment guide) -- read that one first for the checkpoint format,
 FiLM conditioning, and general architecture background. This guide
 covers only what's *different* for Europe.
 
+**Checkpoint generation: this guide tracks whatever the CONUS guide's
+top-of-file currency note says** (no separate Europe checkpoints
+exist -- \S1). The `v3`/`gamma_mixture_season_v3_precip_climo` string
+below is repeated for convenience; if it's gone stale relative to the
+CONUS guide, trust that one and update both the S3 paths here (\S1,
+\S3) to match.
+
 ## 1. What this is
 
 A transfer-learning port: the **same** CONUS-trained
